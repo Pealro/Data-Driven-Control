@@ -1,0 +1,75 @@
+/*
+ * ===========================================================================
+ *  firmware/boards/tclab_mimo
+ *  Controle data-driven (De Persis & Tesi, TAC 2020, Teorema 6) no TCLab
+ *  Planta MIMO: Q1,Q2 (aquecedores) -> T1,T2 (sensores). N=2, M=2.
+ *
+ *  ATENCAO: pinout padrao do TCLab (Q1=pino 3, Q2=pino 5, T1=A0, T2=A1),
+ *  mas esta placa NAO FOI VALIDADA em hardware real neste projeto -- so o
+ *  sketch SISO (firmware/boards/tclab_siso) foi testado ate agora. Confira
+ *  calibracao (TMP36 x AREF), T_SAFE e T_CAP antes de rodar experimentos.
+ * ===========================================================================
+ */
+
+#include <Arduino.h>
+#include <DataDrivenProtocol.h>
+
+constexpr int N = 2;  // estados: T1, T2
+constexpr int M = 2;  // entradas: Q1, Q2
+constexpr int T_CAP = 80;  // reduzido em relacao ao SISO (RAM: du_[M][T_CAP])
+
+// ------------------------- hardware (padrao TCLab) -------------------------
+const int PIN_Q1 = 3;
+const int PIN_Q2 = 5;
+const int PIN_LED = 9;
+const int PIN_T1 = A0;
+const int PIN_T2 = A1;
+
+#define USE_EXTERNAL_AREF 1
+#if USE_EXTERNAL_AREF
+const float MV_FULLSCALE = 3300.0;
+#else
+const float MV_FULLSCALE = 5000.0;
+#endif
+
+const float PMAX_Q = 200.0;  // potencia max. dos heaters (0..255), padrao TCLab
+const float T_SAFE = 600.0;  // limite de seguranca [C] -> desliga tudo
+
+float readTemp(int pin) {
+  long acc = 0;
+  for (int i = 0; i < 10; i++) acc += analogRead(pin);
+  float mV = (acc / 10.0) * MV_FULLSCALE / 1024.0;
+  return (mV - 500.0) / 10.0;
+}
+
+void readSensors(float y[N]) {
+  y[0] = readTemp(PIN_T1);
+  y[1] = readTemp(PIN_T2);
+}
+
+void setActuators(const float uDesired[M], float uApplied[M]) {
+  float pct1 = constrain(uDesired[0], 0.0, 100.0);
+  float pct2 = constrain(uDesired[1], 0.0, 100.0);
+  analogWrite(PIN_Q1, (int)(pct1 * PMAX_Q / 100.0 + 0.5));
+  analogWrite(PIN_Q2, (int)(pct2 * PMAX_Q / 100.0 + 0.5));
+  uApplied[0] = pct1;
+  uApplied[1] = pct2;
+}
+
+bool overSafetyLimit(const float y[N]) { return y[0] > T_SAFE || y[1] > T_SAFE; }
+
+void allOff() {
+  analogWrite(PIN_Q1, 0);
+  analogWrite(PIN_Q2, 0);
+  digitalWrite(PIN_LED, LOW);
+}
+
+DataDrivenProtocol<N, M, T_CAP> dd({readSensors, setActuators, overSafetyLimit, allOff});
+
+void setup() {
+  pinMode(PIN_LED, OUTPUT);
+  allOff();
+  dd.begin(115200);
+}
+
+void loop() { dd.poll(); }

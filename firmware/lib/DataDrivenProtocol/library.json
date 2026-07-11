@@ -1,0 +1,7 @@
+{
+  "name": "DataDrivenProtocol",
+  "version": "0.1.0",
+  "description": "Protocolo serial + maquina de estados genericos (N,M) para o controle data-driven do TCLab (De Persis & Tesi, Thm 6). Header-only.",
+  "frameworks": "arduino",
+  "platforms": "atmelavr"
+}
