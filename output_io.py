@@ -9,6 +9,8 @@ from datetime import datetime
 
 import numpy as np
 
+import calibration
+
 
 def create_test_folder(plant_name: str, base_dir: str = ".") -> tuple[str, str]:
     """Cria (se nao existir) <base_dir>/<plant_name>_<timestamp>/ e retorna
@@ -28,10 +30,23 @@ def save_input_test_csv(
     u_raw: np.ndarray,
     ybar: np.ndarray,
     ubar: np.ndarray,
+    y_physical_min: float | None = None,
+    y_physical_max: float | None = None,
+    u_physical_min: float | None = None,
+    u_physical_max: float | None = None,
 ) -> str:
     n, m = y_raw.shape[0], u_raw.shape[0]
     T = u_raw.shape[1]
     state_deviation = y_raw - ybar.reshape(n, 1)
+
+    # colunas extra em unidade fisica so aparecem se a calibracao (Bloco A)
+    # foi definida para o respectivo lado -- ver calibration.py
+    has_y_calibration = y_physical_min is not None and y_physical_max is not None
+    has_u_calibration = u_physical_min is not None and u_physical_max is not None
+    if has_y_calibration:
+        y_physical = calibration.y_raw_to_physical(y_raw, y_physical_min, y_physical_max)
+    if has_u_calibration:
+        u_physical = calibration.u_raw_to_physical(u_raw, u_physical_min, u_physical_max)
 
     csv_path = os.path.join(folder_path, f"{plant_name}_{timestamp}_teste_de_input.csv")
     with open(csv_path, "w", newline="") as csv_file:
@@ -43,6 +58,10 @@ def save_input_test_csv(
             + [f"dy{i + 1}" for i in range(n)]
             + [f"du{j + 1}_aplicado" for j in range(m)]
         )
+        if has_y_calibration:
+            header += [f"y{i + 1}_fisico" for i in range(n)]
+        if has_u_calibration:
+            header += [f"u{j + 1}_aplicado_fisico" for j in range(m)]
         csv_writer.writerow(header)
         for k in range(T):
             row = (
@@ -52,14 +71,23 @@ def save_input_test_csv(
                 + list(state_deviation[:, k])
                 + list(u_raw[:, k] - ubar)
             )
+            if has_y_calibration:
+                row += list(y_physical[:, k])
+            if has_u_calibration:
+                row += list(u_physical[:, k])
             csv_writer.writerow(row)
-        csv_writer.writerow(
+        last_row = (
             [T, t_raw[T]]
             + list(y_raw[:, T])
             + [""] * m
             + list(state_deviation[:, T])
             + [""] * m
         )
+        if has_y_calibration:
+            last_row += list(y_physical[:, T])
+        if has_u_calibration:
+            last_row += [""] * m
+        csv_writer.writerow(last_row)
     return csv_path
 
 

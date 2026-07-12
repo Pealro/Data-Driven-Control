@@ -15,6 +15,7 @@ import sys
 
 import numpy as np
 
+import calibration
 import wizard
 from control_modes import run_function_mode, run_slider_mode, run_terminal_setpoint_mode
 from datadriven import assembly, diagnostics, lmi
@@ -79,6 +80,21 @@ def main():
     # ------------------------------------------------------------ Bloco B --
     print(f"\n[1] Assentando e coletando experimento ({session.T} passos de {session.dt} s)...")
     acquisition_plot = LiveAcquisitionPlot(session.plant_name, n, m)
+
+    def _acquisition_on_sample(t_s, y_vals, u_vals):
+        # exibe em unidade fisica se a calibracao (Bloco A) foi definida;
+        # os arrays y_raw/u_raw retornados por run_experiment (usados no
+        # X0/X1/U0 e na LMI) continuam sempre em unidade crua
+        y_physical = [
+            calibration.y_raw_to_physical(float(v), session.y_physical_min, session.y_physical_max)
+            for v in y_vals
+        ]
+        u_physical = [
+            calibration.u_raw_to_physical(float(v), session.u_physical_min, session.u_physical_max)
+            for v in u_vals
+        ]
+        acquisition_plot.add_sample(t_s, y_physical, u_physical)
+
     try:
         ybar, t_raw, y_raw, u_raw = plant.run_experiment(
             session.T,
@@ -87,7 +103,7 @@ def main():
             session.settle_duration_s,
             session.excitation_amplitude,
             session.seed,
-            on_sample=acquisition_plot.add_sample,
+            on_sample=_acquisition_on_sample,
         )
     except KeyboardInterrupt:
         print("\nAbortado pelo usuario durante o experimento.")
@@ -115,13 +131,6 @@ def main():
             " (correto), mas considere reduzir excitation_amplitude."
         )
 
-    out_of_bounds_count = diagnostics.check_output_bounds(y_raw, session.y_min, session.y_max)
-    if out_of_bounds_count > 0:
-        print(
-            f"    AVISO: {out_of_bounds_count} amostras de estado fora dos limites conhecidos"
-            f" [y_min={session.y_min}, y_max={session.y_max}]."
-        )
-
     # ------------------------------------------------------------ Bloco C --
     X0, X1, U0 = assembly.build_X0_X1_U0(y_raw, u_raw, ybar, session.ubar)
 
@@ -145,7 +154,9 @@ def main():
 
     folder_path, timestamp = create_test_folder(session.plant_name)
     input_csv_path = save_input_test_csv(
-        folder_path, session.plant_name, timestamp, t_raw, y_raw, u_raw, ybar, session.ubar
+        folder_path, session.plant_name, timestamp, t_raw, y_raw, u_raw, ybar, session.ubar,
+        y_physical_min=session.y_physical_min, y_physical_max=session.y_physical_max,
+        u_physical_min=session.u_physical_min, u_physical_max=session.u_physical_max,
     )
     acquisition_png_path = f"{folder_path}/{session.plant_name}_{timestamp}_teste_de_input.png"
     acquisition_plot.close(keep_open=False, save_path=acquisition_png_path)
@@ -196,11 +207,21 @@ def main():
         # dar tempo real de o usuario interagir (terminal/slider) -- irrelevante
         # para plantas seriais, que ja sao pautadas pelo relogio do Arduino.
 
+    # setpoint em unidade fisica (se calibrado -- ver calibration.py); os 3
+    # modos abaixo convertem para unidade crua internamente antes de mandar
+    # ao firmware (K/ubar seguem sempre em unidade crua)
+    ybar_physical = calibration.y_raw_to_physical(ybar, session.y_physical_min, session.y_physical_max)
     initial_setpoint = np.array(
         [
-            prompt_float(f"Setpoint inicial y{i + 1}", default=float(ybar[i]))
+            prompt_float(f"Setpoint inicial y{i + 1}", default=float(ybar_physical[i]))
             for i in range(n)
         ]
+    )
+    calibration_kwargs = dict(
+        y_physical_min=session.y_physical_min,
+        y_physical_max=session.y_physical_max,
+        u_physical_min=session.u_physical_min,
+        u_physical_max=session.u_physical_max,
     )
 
     mode = prompt_choice(
@@ -214,29 +235,38 @@ def main():
     try:
         if mode == 0:
             run_terminal_setpoint_mode(
-                plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp
+                plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
+                **calibration_kwargs,
             )
         elif mode == 1:
             slider_range = (
-                session.y_min
-                if session.y_min is not None
-                else float(ybar[0] - session.max_expected_state_deviation),
-                session.y_max
-                if session.y_max is not None
-                else float(ybar[0] + session.max_expected_state_deviation),
+                session.y_physical_min
+                if session.y_physical_min is not None
+                else float(ybar_physical[0] - session.max_expected_state_deviation),
+                session.y_physical_max
+                if session.y_physical_max is not None
+                else float(ybar_physical[0] + session.max_expected_state_deviation),
             )
             run_slider_mode(
                 plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
                 slider_range,
+                **calibration_kwargs,
             )
         else:
-            default_max_output = session.y_max if session.y_max is not None else float(ybar[0] * 2)
+            default_min_output = session.y_physical_min if session.y_physical_min is not None else 0.0
+            default_max_output = (
+                session.y_physical_max if session.y_physical_max is not None else float(ybar_physical[0] * 2)
+            )
+            min_output = prompt_float(
+                "Valor minimo de saida da funcao f(t)", default=default_min_output
+            )
             max_output = prompt_float(
                 "Valor maximo de saida da funcao f(t)", default=default_max_output
             )
             run_function_mode(
                 plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
-                max_output,
+                min_output, max_output,
+                **calibration_kwargs,
             )
     except Exception as error:
         # rede de seguranca: um erro aqui (ex.: hiccup na serial) nao deveria

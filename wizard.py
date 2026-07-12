@@ -44,10 +44,12 @@ class WizardSession:
     max_expected_state_deviation: float
     rho: float
     seed: int | None
-    u_min: float | None = None
-    u_max: float | None = None
-    y_min: float | None = None
-    y_max: float | None = None
+    # calibracao fisica opcional (ver calibration.py) -- None = sem
+    # conversao, dados ficam em unidade crua (volts / % de duty)
+    y_physical_min: float | None = None  # valor fisico quando o ADC le 0V
+    y_physical_max: float | None = None  # valor fisico quando o ADC le 5V
+    u_physical_min: float | None = None  # valor fisico quando o atuador esta em 0%
+    u_physical_max: float | None = None  # valor fisico quando o atuador esta em 100%
 
 
 # ---------------------------------------------------------------------------
@@ -138,13 +140,39 @@ def choose_com_port() -> str:
     return ports[index - 1].device
 
 
-def _prompt_io_limits(u_min_default=None, u_max_default=None, y_min_default=None, y_max_default=None):
-    print("\nLimites conhecidos (digite 'd' se nao souber -- desativa a checagem correspondente):")
-    u_min = prompt_float_or_unknown("  Valor minimo de entrada (u_min)", default=u_min_default)
-    u_max = prompt_float_or_unknown("  Valor maximo de entrada (u_max)", default=u_max_default)
-    y_min = prompt_float_or_unknown("  Valor minimo de saida (y_min)", default=y_min_default)
-    y_max = prompt_float_or_unknown("  Valor maximo de saida (y_max)", default=y_max_default)
-    return u_min, u_max, y_min, y_max
+def _prompt_calibration(
+    y_physical_min_default=None,
+    y_physical_max_default=None,
+    u_physical_min_default=None,
+    u_physical_max_default=None,
+):
+    """Calibracao fisica (Bloco A): os valores extremos da planta em relacao
+    a porta do Arduino. 'entrada' = leitura do sensor (porta analogica,
+    0-5V); 'saida' = comando do atuador (PWM, 0-100%). 'd' = desconhecido
+    desativa a conversao correspondente (dados ficam em unidade crua)."""
+    print(
+        "\nCalibracao fisica (digite 'd' se nao souber -- desativa a conversao"
+        " correspondente, dados ficam em unidade crua):"
+    )
+    print("  Entrada = leitura do sensor na porta analogica do Arduino (0-5V):")
+    y_physical_min = prompt_float_or_unknown(
+        "    Valor minimo de entrada (valor fisico quando a porta analogica le 0V)",
+        default=y_physical_min_default,
+    )
+    y_physical_max = prompt_float_or_unknown(
+        "    Valor maximo de entrada (valor fisico quando a porta analogica le 5V)",
+        default=y_physical_max_default,
+    )
+    print("  Saida = comando do atuador (PWM, 0-100%):")
+    u_physical_min = prompt_float_or_unknown(
+        "    Valor minimo de saida (valor fisico quando o atuador esta em 0%)",
+        default=u_physical_min_default,
+    )
+    u_physical_max = prompt_float_or_unknown(
+        "    Valor maximo de saida (valor fisico quando o atuador esta em 100%)",
+        default=u_physical_max_default,
+    )
+    return y_physical_min, y_physical_max, u_physical_min, u_physical_max
 
 
 # ---------------------------------------------------------------------------
@@ -269,11 +297,7 @@ def _wizard_established_plant() -> WizardSession:
         module.PORT = port  # a lambda de make_plant le PORT do modulo em tempo de chamada
     plant = cfg.make_plant()
 
-    u_min, u_max, y_min, y_max = _prompt_io_limits(
-        u_min_default=getattr(plant, "u_min", None), u_max_default=getattr(plant, "u_max", None)
-    )
-    plant.u_min = u_min
-    plant.u_max = u_max
+    y_physical_min, y_physical_max, u_physical_min, u_physical_max = _prompt_calibration()
 
     return WizardSession(
         plant_name=cfg.name,
@@ -286,10 +310,10 @@ def _wizard_established_plant() -> WizardSession:
         max_expected_state_deviation=max_expected_state_deviation,
         rho=cfg.rho,
         seed=cfg.seed,
-        u_min=u_min,
-        u_max=u_max,
-        y_min=y_min,
-        y_max=y_max,
+        y_physical_min=y_physical_min,
+        y_physical_max=y_physical_max,
+        u_physical_min=u_physical_min,
+        u_physical_max=u_physical_max,
     )
 
 
@@ -310,7 +334,7 @@ def _wizard_new_plant() -> WizardSession:
         "  Amplitude de estado esperada (max_expected_state_deviation)", min_value=0.0
     )
 
-    u_min, u_max, y_min, y_max = _prompt_io_limits(u_min_default=0.0, u_max_default=100.0)
+    y_physical_min, y_physical_max, u_physical_min, u_physical_max = _prompt_calibration()
 
     port = choose_com_port()
     if not flash_generic_firmware(port):
@@ -318,8 +342,6 @@ def _wizard_new_plant() -> WizardSession:
             "Firmware generico nao gravado -- corrija e tente novamente antes de conectar."
         )
     plant = GenericPlant(n=n, m=m, port=port, verbose=True)
-    plant.u_min = u_min
-    plant.u_max = u_max
 
     ubar = np.full(m, DEFAULT_UBAR_PERCENT)
     print(
@@ -338,8 +360,8 @@ def _wizard_new_plant() -> WizardSession:
         max_expected_state_deviation=max_expected_state_deviation,
         rho=DEFAULT_RHO,
         seed=DEFAULT_SEED,
-        u_min=u_min,
-        u_max=u_max,
-        y_min=y_min,
-        y_max=y_max,
+        y_physical_min=y_physical_min,
+        y_physical_max=y_physical_max,
+        u_physical_min=u_physical_min,
+        u_physical_max=u_physical_max,
     )

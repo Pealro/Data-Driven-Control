@@ -44,19 +44,6 @@ def check_saturation(
     return int(np.sum((u_raw <= lower_bound) | (u_raw >= upper_bound)))
 
 
-def check_output_bounds(
-    y_raw: np.ndarray, y_min: float | None = None, y_max: float | None = None
-) -> int:
-    """Numero de amostras de estado fora dos limites absolutos conhecidos
-    da planta (y_min/y_max, informados no wizard -- 'd' = desconhecido
-    desativa o respectivo lado, igual a check_saturation)."""
-    if y_min is None and y_max is None:
-        return 0
-    lower_bound = -np.inf if y_min is None else y_min
-    upper_bound = np.inf if y_max is None else y_max
-    return int(np.sum((y_raw < lower_bound) | (y_raw > upper_bound)))
-
-
 def check_excursion(
     X0: np.ndarray, X1: np.ndarray, max_expected_state_deviation: float
 ) -> tuple[float, bool]:
