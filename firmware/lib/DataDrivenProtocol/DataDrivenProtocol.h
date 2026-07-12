@@ -15,20 +15,25 @@
  *    bool overSafetyLimit(const float y[N]) { ... }
  *    void allOff() { ... }
  *
- *    DataDrivenProtocol<N, M, T_CAP> dd({readSensors, setActuators,
- *                                         overSafetyLimit, allOff});
+ *    DataDrivenProtocol<N, M> dd({readSensors, setActuators,
+ *                                  overSafetyLimit, allOff});
  *    void setup() { dd.begin(115200); }
  *    void loop()  { dd.poll(); }
  *
+ *  A excitacao du(k) NAO e enviada pelo PC nem armazenada em RAM: o
+ *  firmware a gera sob demanda com um PRNG determinístico (Xorshift32,
+ *  ver Xorshift32.h) semeado pelo campo <seed> do CFG. Isso remove o unico
+ *  array O(T) que existia (o antigo buffer du_[M][T_CAP]) -- a janela T
+ *  deixa de ser limitada pela RAM do Arduino.
+ *
  *  Protocolo serial: 115200 baud, linhas ASCII terminadas em '\n'
  *   PC -> Arduino:
- *     CFG,<T>,<dt_ms>,<n>,<m>,<ubar_1..ubar_m>,<settle_s>
- *     U,<k>,<du_1..du_m>
+ *     CFG,<T>,<dt_ms>,<n>,<m>,<ubar_1..ubar_m>,<settle_s>,<amp_entrada>,<seed>
  *     GO
  *     K,<K_11..K_1n,K_21..K_mn>,<Tsp_1..Tsp_n>,<ctrl_s>   (K linha-major, m x n)
  *     X                                                    aborta a qualquer momento
  *   Arduino -> PC:
- *     ACK,CFG | ACK,U,<k> | ACK,GO | ACK,K
+ *     ACK,CFG | ACK,GO | ACK,K
  *     S,<t_s>,<y_1..y_n>            streaming do assentamento (1 Hz)
  *     EQ,<ybar_1..ybar_n>           equilibrio medido
  *     D,<k>,<t_ms>,<y_1..y_n>,<u_1..u_m>   amostra do experimento (t_ms =
@@ -52,7 +57,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-template <int N, int M, int T_CAP>
+#include "Xorshift32.h"
+
+template <int N, int M>
 class DataDrivenProtocol {
 public:
   struct PlantIO {
@@ -102,12 +109,12 @@ private:
   PlantIO io_;
   State state_ = IDLE;
 
-  int Tlen_ = 0;
+  long Tlen_ = 0;
   unsigned long dt_ms_ = 4000;
   float ubar_[M] = {0};
   unsigned long settle_ms_ = 0;
-  float du_[M][T_CAP];
-  int nrec_ = 0;
+  float ampEntrada_ = 0.0f;
+  Xorshift32 rng_;  // gera du(k) sob demanda -- sem buffer O(T) em RAM
 
   float K_[M][N] = {{0}};
   float Tsp_[N] = {0};
@@ -115,7 +122,7 @@ private:
 
   unsigned long t0_ = 0, nextTick_ = 0, lastSettleMsg_ = 0;
   unsigned long tExpStart_ = 0;  // instante (millis) do inicio do EXPERIMENT, para D,<k>,<t_ms>,...
-  int kstep_ = 0;
+  long kstep_ = 0;
   float ybarAcc_[N] = {0};
   int ybarN_ = 0;
   float ybar_[N] = {0};
@@ -150,7 +157,7 @@ private:
     }
 
     if (strcmp(tok, "CFG") == 0) {
-      Tlen_ = atoi(strtok(nullptr, ","));
+      Tlen_ = atol(strtok(nullptr, ","));
       dt_ms_ = (unsigned long)atol(strtok(nullptr, ","));
       int nIn = atoi(strtok(nullptr, ","));
       int mIn = atoi(strtok(nullptr, ","));
@@ -160,32 +167,18 @@ private:
       }
       for (int i = 0; i < M; i++) ubar_[i] = atof(strtok(nullptr, ","));
       settle_ms_ = (unsigned long)atol(strtok(nullptr, ",")) * 1000UL;
-      if (Tlen_ <= 0 || Tlen_ > T_CAP) {
+      ampEntrada_ = atof(strtok(nullptr, ","));
+      rng_ = Xorshift32((uint32_t)atol(strtok(nullptr, ",")));
+      if (Tlen_ <= 0) {
         Serial.println(F("ERR,T_INVALIDO"));
         return;
       }
-      nrec_ = 0;
       state_ = READY;
       Serial.println(F("ACK,CFG"));
       return;
     }
 
-    if (strcmp(tok, "U") == 0 && state_ == READY) {
-      int k = atoi(strtok(nullptr, ","));
-      if (k >= 0 && k < Tlen_) {
-        for (int j = 0; j < M; j++) du_[j][k] = atof(strtok(nullptr, ","));
-        nrec_++;
-        Serial.print(F("ACK,U,"));
-        Serial.println(k);
-      }
-      return;
-    }
-
     if (strcmp(tok, "GO") == 0 && state_ == READY) {
-      if (nrec_ < Tlen_) {
-        Serial.println(F("ERR,VETOR_INCOMPLETO"));
-        return;
-      }
       float uApplied[M];
       io_.setActuators(ubar_, uApplied);
       t0_ = millis();
@@ -258,7 +251,10 @@ private:
 
     if (kstep_ < Tlen_) {
       float uDesired[M], uApplied[M];
-      for (int j = 0; j < M; j++) uDesired[j] = ubar_[j] + du_[j][kstep_];
+      for (int j = 0; j < M; j++) {
+        float duVal = rng_.uniform(-ampEntrada_, ampEntrada_);
+        uDesired[j] = ubar_[j] + duVal;
+      }
       io_.setActuators(uDesired, uApplied);
 
       Serial.print(F("D,"));

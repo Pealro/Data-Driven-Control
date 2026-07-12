@@ -7,7 +7,7 @@
  *  ATENCAO: pinout padrao do TCLab (Q1=pino 3, Q2=pino 5, T1=A0, T2=A1),
  *  mas esta placa NAO FOI VALIDADA em hardware real neste projeto -- so o
  *  sketch SISO (firmware/boards/tclab_siso) foi testado ate agora. Confira
- *  calibracao (TMP36 x AREF), T_SAFE e T_CAP antes de rodar experimentos.
+ *  calibracao (TMP36 x AREF) e T_SAFE antes de rodar experimentos.
  * ===========================================================================
  */
 
@@ -16,8 +16,6 @@
 
 constexpr int N = 2;  // estados: T1, T2
 constexpr int M = 2;  // entradas: Q1, Q2
-constexpr int T_CAP = 80;  // reduzido em relacao ao SISO (RAM: du_[M][T_CAP])
-
 // ------------------------- hardware (padrao TCLab) -------------------------
 const int PIN_Q1 = 3;
 const int PIN_Q2 = 5;
@@ -64,7 +62,7 @@ void allOff() {
   digitalWrite(PIN_LED, LOW);
 }
 
-DataDrivenProtocol<N, M, T_CAP> dd({readSensors, setActuators, overSafetyLimit, allOff});
+DataDrivenProtocol<N, M> dd({readSensors, setActuators, overSafetyLimit, allOff});
 
 void setup() {
   pinMode(PIN_LED, OUTPUT);

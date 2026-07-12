@@ -6,6 +6,7 @@ n, m sao inferidos do shape de A, B (MIMO generico)."""
 
 import numpy as np
 
+from datadriven.excitation import generate_excitation
 from plants.base import Plant
 
 
@@ -56,7 +57,9 @@ class SimulatedLinearPlant(Plant):
         self.x = self.A @ self.x + self.B @ u_applied + noise
         return self.x.copy(), u_applied
 
-    def run_experiment(self, du, dt, ubar, settle_s):
+    def run_experiment(self, T, dt, ubar, settle_s, amp_entrada, seed):
+        du = generate_excitation(T, self.m, amp_entrada, seed=seed)
+
         self._dt = dt
         self._ubar = np.asarray(ubar, dtype=float)
 
@@ -67,7 +70,6 @@ class SimulatedLinearPlant(Plant):
         if self.verbose:
             print(f"    Equilibrio simulado: ybar = {np.round(ybar, 4)}")
 
-        T = du.shape[1]
         t_raw = np.arange(T + 1) * dt  # simulado: dt e exato, sem desvio de execucao
         y_raw = np.zeros((self.n, T + 1))
         u_raw = np.zeros((self.m, T))

@@ -66,26 +66,34 @@ class SerialLink:
 
 
 class DataDrivenSerialProtocol:
-    """Implementa o protocolo vetorial CFG/U/GO/K/X <-> ACK/S/EQ/D/WAITK/C/END/ERR."""
+    """Implementa o protocolo vetorial CFG/GO/K/X <-> ACK/S/EQ/D/WAITK/C/END/ERR.
+
+    A excitacao du(k) nao e enviada pelo PC: o firmware a gera sob demanda
+    com um PRNG determinístico semeado por <seed> (ver firmware/lib/
+    DataDrivenProtocol/Xorshift32.h), entao nao ha buffer O(T) no Arduino e
+    a janela T deixa de ser limitada pela RAM do microcontrolador.
+    """
 
     def __init__(self, link: SerialLink, n: int, m: int):
         self.link = link
         self.n = n
         self.m = m
 
-    def send_config(self, T: int, dt_s: float, ubar: np.ndarray, settle_s: float) -> None:
+    def send_config(
+        self,
+        T: int,
+        dt_s: float,
+        ubar: np.ndarray,
+        settle_s: float,
+        amp_entrada: float,
+        seed: int | None,
+    ) -> None:
+        seed_val = 0 if seed is None else int(seed)
         self.link.send(
-            f"CFG,{T},{int(dt_s * 1000)},{self.n},{self.m},{fmt_vec(ubar, 3)},{int(settle_s)}"
+            f"CFG,{T},{int(dt_s * 1000)},{self.n},{self.m},{fmt_vec(ubar, 3)},"
+            f"{int(settle_s)},{amp_entrada:.4f},{seed_val}"
         )
         self.link.wait_for("ACK,CFG", timeout_s=10)
-
-    def send_excitation(self, du: np.ndarray, echo: bool = True) -> None:
-        T = du.shape[1]
-        for k in range(T):
-            self.link.send(f"U,{k},{fmt_vec(du[:, k])}")
-            self.link.wait_for(f"ACK,U,{k}", timeout_s=5)
-        if echo:
-            print(f"    Vetor de entrada ({T} amostras) enviado e confirmado.")
 
     def go_and_settle(self, on_progress=None) -> np.ndarray:
         self.link.send("GO")

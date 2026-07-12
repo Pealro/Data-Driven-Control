@@ -19,7 +19,6 @@
 
 constexpr int N = 1;  // estados: T1
 constexpr int M = 1;  // entradas: Q1
-constexpr int T_CAP = 120;
 
 // ------------------------- hardware (padrao TCLab) -------------------------
 const int PIN_Q1 = 3;   // aquecedor 1 (PWM)
@@ -64,7 +63,7 @@ void allOff() {
   digitalWrite(PIN_LED, LOW);
 }
 
-DataDrivenProtocol<N, M, T_CAP> dd({readSensors, setActuators, overSafetyLimit, allOff});
+DataDrivenProtocol<N, M> dd({readSensors, setActuators, overSafetyLimit, allOff});
 
 void setup() {
   //#if USE_EXTERNAL_AREF

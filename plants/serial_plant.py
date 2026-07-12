@@ -30,13 +30,14 @@ class SerialPlant(Plant):
         self.proto = DataDrivenSerialProtocol(self.link, n=n, m=m)
         self.verbose = verbose
 
-    def run_experiment(self, du, dt, ubar, settle_s):
-        T = du.shape[1]
-        self.proto.send_config(T, dt, ubar, settle_s)
-        self.proto.send_excitation(du, echo=self.verbose)
+    def run_experiment(self, T, dt, ubar, settle_s, amp_entrada, seed):
+        self.proto.send_config(T, dt, ubar, settle_s, amp_entrada, seed)
 
         if self.verbose:
-            print(f"\n[settle] assentando em ubar = {np.round(ubar, 2)} por {settle_s} s...")
+            print(
+                f"\n[settle] assentando em ubar = {np.round(ubar, 2)} por {settle_s} s... "
+                f"(excitacao gerada no firmware: amp={amp_entrada}, seed={seed})"
+            )
 
         def on_settle_progress(line):
             if self.verbose:

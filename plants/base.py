@@ -13,18 +13,30 @@ class Plant(ABC):
 
     @abstractmethod
     def run_experiment(
-        self, du: np.ndarray, dt: float, ubar: np.ndarray, settle_s: float
+        self,
+        T: int,
+        dt: float,
+        ubar: np.ndarray,
+        settle_s: float,
+        amp_entrada: float,
+        seed: int | None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Assenta a planta em ubar por settle_s segundos, mede o equilibrio,
-        depois aplica ubar + du(k) e coleta a resposta.
+        depois aplica T passos de ubar + du(k) ~ U(-amp_entrada, amp_entrada)
+        e coleta a resposta.
+
+        A geracao de du(k) e responsabilidade de CADA implementacao de
+        Plant, nao do chamador: uma planta serial manda a semente ao
+        firmware e ele gera du(k) sob demanda (sem guardar o vetor inteiro
+        em RAM -- ver plants/serial_plant.py); a planta simulada gera du
+        localmente em Python (datadriven.excitation). Isso evita que T seja
+        limitado pela RAM de um microcontrolador real.
 
         Assentamento e experimento sao uma sequencia atomica (nao dois
         metodos separados): no protocolo serial real o Arduino so aceita GO
-        depois de receber o vetor du inteiro, e GO dispara assentamento +
-        experimento em uma unica transicao de estados -- nao ha como medir
-        o equilibrio sem ja ter committado du.
+        apos CFG, e GO dispara assentamento + experimento em uma unica
+        transicao de estados.
 
-        du: (m, T) desvios de entrada a aplicar, k = 0..T-1.
         Retorna (ybar, t_raw, y_raw, u_raw):
           ybar (n,)      estado de equilibrio medido;
           t_raw (T+1,)   tempo REAL de cada amostra (s) desde o inicio do

@@ -21,7 +21,6 @@
 
 constexpr int N = 1;  // estado: tensao no capacitor
 constexpr int M = 1;  // entrada: duty PWM do sinal de excitacao
-constexpr int T_CAP = 200;
 
 const int PIN_IN = 3;    // sinal/alimentacao da planta (PWM)
 const int PIN_OUT = A0;  // leitura de tensao
@@ -48,7 +47,7 @@ bool overSafetyLimit(const float y[N]) { return y[0] > V_SAFE; }
 
 void allOff() { analogWrite(PIN_IN, 0); }
 
-DataDrivenProtocol<N, M, T_CAP> dd({readSensors, setActuators, overSafetyLimit, allOff});
+DataDrivenProtocol<N, M> dd({readSensors, setActuators, overSafetyLimit, allOff});
 
 void setup() {
   allOff();

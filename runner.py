@@ -15,7 +15,7 @@ import sys
 
 import numpy as np
 
-from datadriven import assembly, diagnostics, excitation, lmi
+from datadriven import assembly, diagnostics, lmi
 from plotting import plot_results
 
 
@@ -23,7 +23,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="Controle data-driven (Teorema 6, De Persis & Tesi)")
     p.add_argument(
         "--config",
-        default="config.tclab_siso",
+        default="config.rc_circuit",
         help="modulo dotted path da config da planta (ex.: config.tclab_siso)",
     )
     p.add_argument(
@@ -87,11 +87,12 @@ def main():
 
     plant = cfg.make_plant()
     n, m = plant.n, plant.m
-    du = excitation.generate_excitation(cfg.T, m, cfg.amp_entrada, seed=cfg.seed)
 
     try:
         print(f"\n[1] Assentando e coletando experimento ({cfg.T} passos de {cfg.dt} s)...")
-        ybar, t_raw, y_raw, u_raw = plant.run_experiment(du, cfg.dt, cfg.ubar, cfg.settle_s)
+        ybar, t_raw, y_raw, u_raw = plant.run_experiment(
+            cfg.T, cfg.dt, cfg.ubar, cfg.settle_s, cfg.amp_entrada, cfg.seed
+        )
     except KeyboardInterrupt:
         print("\nAbortado pelo usuario durante o experimento.")
         if hasattr(plant, "abort"):
