@@ -15,16 +15,16 @@ class ExperimentConfig:
     name: str
     make_plant: Callable[[], Plant]
 
-    T: int                    # janela do experimento (numero de amostras)
-    dt: float                 # taxa de amostragem [s]
-    amp_entrada: float        # amplitude do desvio de entrada du
-    amp_estado: float         # excursao maxima esperada do estado (diagnostico)
-    rho: float                # margem de estabilidade (disco de raio rho < 1)
+    T: int                              # janela do experimento (numero de amostras)
+    dt: float                           # taxa de amostragem [s]
+    excitation_amplitude: float         # amplitude do desvio de entrada delta_u
+    max_expected_state_deviation: float  # excursao maxima esperada do estado (diagnostico)
+    rho: float                          # margem de estabilidade (disco de raio rho < 1)
 
-    ubar: np.ndarray          # entrada de equilibrio (m,)
-    settle_s: float           # tempo de assentamento em ubar [s]
+    ubar: np.ndarray                    # entrada de equilibrio (m,)
+    settle_duration_s: float            # tempo de assentamento em ubar [s]
 
-    setpoint: Optional[np.ndarray]  # setpoint do controle (n,); None => usa ybar medido
-    ctrl_s: float              # duracao do controle em malha fechada [s] (0 = infinito)
+    setpoint: Optional[np.ndarray]      # setpoint do controle (n,); None => usa ybar medido
+    control_duration_s: float           # duracao do controle em malha fechada [s] (0 = infinito)
 
     seed: Optional[int] = None

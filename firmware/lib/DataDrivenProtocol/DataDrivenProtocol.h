@@ -11,26 +11,26 @@
  *
  *    #include <DataDrivenProtocol.h>
  *    void readSensors(float y[N]) { ... }
- *    void setActuators(const float uDesired[M], float uApplied[M]) { ... }
+ *    void setActuators(const float u_desired[M], float u_applied[M]) { ... }
  *    bool overSafetyLimit(const float y[N]) { ... }
  *    void allOff() { ... }
  *
- *    DataDrivenProtocol<N, M> dd({readSensors, setActuators,
- *                                  overSafetyLimit, allOff});
- *    void setup() { dd.begin(115200); }
- *    void loop()  { dd.poll(); }
+ *    DataDrivenProtocol<N, M> protocol({readSensors, setActuators,
+ *                                        overSafetyLimit, allOff});
+ *    void setup() { protocol.begin(115200); }
+ *    void loop()  { protocol.poll(); }
  *
- *  A excitacao du(k) NAO e enviada pelo PC nem armazenada em RAM: o
+ *  A excitacao delta_u(k) NAO e enviada pelo PC nem armazenada em RAM: o
  *  firmware a gera sob demanda com um PRNG determinístico (Xorshift32,
  *  ver Xorshift32.h) semeado pelo campo <seed> do CFG. Isso remove o unico
- *  array O(T) que existia (o antigo buffer du_[M][T_CAP]) -- a janela T
+ *  array O(T) que existia (o antigo buffer de excitacao) -- a janela T
  *  deixa de ser limitada pela RAM do Arduino.
  *
  *  Protocolo serial: 115200 baud, linhas ASCII terminadas em '\n'
  *   PC -> Arduino:
- *     CFG,<T>,<dt_ms>,<n>,<m>,<ubar_1..ubar_m>,<settle_s>,<amp_entrada>,<seed>
+ *     CFG,<T>,<dt_ms>,<n>,<m>,<ubar_1..ubar_m>,<settle_duration_s>,<excitation_amplitude>,<seed>
  *     GO
- *     K,<K_11..K_1n,K_21..K_mn>,<Tsp_1..Tsp_n>,<ctrl_s>   (K linha-major, m x n)
+ *     K,<K_11..K_1n,K_21..K_mn>,<setpoint_1..setpoint_n>,<control_duration_s>   (K linha-major, m x n)
  *     X                                                    aborta a qualquer momento
  *   Arduino -> PC:
  *     ACK,CFG | ACK,GO | ACK,K
@@ -64,9 +64,9 @@ class DataDrivenProtocol {
 public:
   struct PlantIO {
     void (*readSensors)(float y[N]);
-    // aplica uDesired (pode estar fora dos limites fisicos) e escreve em
-    // uApplied[] o valor REALMENTE aplicado (ja com saturacao do atuador).
-    void (*setActuators)(const float uDesired[M], float uApplied[M]);
+    // aplica u_desired (pode estar fora dos limites fisicos) e escreve em
+    // u_applied[] o valor REALMENTE aplicado (ja com saturacao do atuador).
+    void (*setActuators)(const float u_desired[M], float u_applied[M]);
     bool (*overSafetyLimit)(const float y[N]);
     void (*allOff)();
   };
@@ -82,13 +82,13 @@ public:
     while (Serial.available()) {
       char c = Serial.read();
       if (c == '\n' || c == '\r') {
-        if (blen_ > 0) {
-          buf_[blen_] = '\0';
-          handleLine(buf_);
-          blen_ = 0;
+        if (line_buffer_length_ > 0) {
+          line_buffer_[line_buffer_length_] = '\0';
+          handleLine(line_buffer_);
+          line_buffer_length_ = 0;
         }
-      } else if (blen_ < sizeof(buf_) - 1) {
-        buf_[blen_++] = c;
+      } else if (line_buffer_length_ < sizeof(line_buffer_) - 1) {
+        line_buffer_[line_buffer_length_++] = c;
       }
     }
 
@@ -109,26 +109,26 @@ private:
   PlantIO io_;
   State state_ = IDLE;
 
-  long Tlen_ = 0;
+  long T_ = 0;  // numero de passos do experimento (janela de excitacao)
   unsigned long dt_ms_ = 4000;
   float ubar_[M] = {0};
-  unsigned long settle_ms_ = 0;
-  float ampEntrada_ = 0.0f;
-  Xorshift32 rng_;  // gera du(k) sob demanda -- sem buffer O(T) em RAM
+  unsigned long settle_duration_ms_ = 0;
+  float excitation_amplitude_ = 0.0f;
+  Xorshift32 rng_;  // gera delta_u(k) sob demanda -- sem buffer O(T) em RAM
 
   float K_[M][N] = {{0}};
-  float Tsp_[N] = {0};
-  unsigned long ctrl_ms_ = 0;
+  float setpoint_[N] = {0};
+  unsigned long control_duration_ms_ = 0;
 
-  unsigned long t0_ = 0, nextTick_ = 0, lastSettleMsg_ = 0;
-  unsigned long tExpStart_ = 0;  // instante (millis) do inicio do EXPERIMENT, para D,<k>,<t_ms>,...
-  long kstep_ = 0;
-  float ybarAcc_[N] = {0};
-  int ybarN_ = 0;
+  unsigned long phase_start_ms_ = 0, next_tick_ms_ = 0, last_settle_message_ms_ = 0;
+  unsigned long experiment_start_ms_ = 0;  // inicio do EXPERIMENT, para D,<k>,<t_ms>,...
+  long sample_index_ = 0;                  // k
+  float ybar_accumulator_[N] = {0};
+  int ybar_sample_count_ = 0;
   float ybar_[N] = {0};
 
-  char buf_[80];
-  byte blen_ = 0;
+  char line_buffer_[80];
+  byte line_buffer_length_ = 0;
 
   bool safetyStop(const float y[N]) {
     if (io_.overSafetyLimit(y)) {
@@ -146,30 +146,30 @@ private:
   }
 
   void handleLine(char *line) {
-    char *tok = strtok(line, ",");
-    if (tok == nullptr) return;
+    char *token = strtok(line, ",");
+    if (token == nullptr) return;
 
-    if (strcmp(tok, "X") == 0) {
+    if (strcmp(token, "X") == 0) {
       io_.allOff();
       state_ = IDLE;
       Serial.println(F("END"));
       return;
     }
 
-    if (strcmp(tok, "CFG") == 0) {
-      Tlen_ = atol(strtok(nullptr, ","));
+    if (strcmp(token, "CFG") == 0) {
+      T_ = atol(strtok(nullptr, ","));
       dt_ms_ = (unsigned long)atol(strtok(nullptr, ","));
-      int nIn = atoi(strtok(nullptr, ","));
-      int mIn = atoi(strtok(nullptr, ","));
-      if (nIn != N || mIn != M) {
+      int received_n = atoi(strtok(nullptr, ","));
+      int received_m = atoi(strtok(nullptr, ","));
+      if (received_n != N || received_m != M) {
         Serial.println(F("ERR,NM_MISMATCH"));
         return;
       }
       for (int i = 0; i < M; i++) ubar_[i] = atof(strtok(nullptr, ","));
-      settle_ms_ = (unsigned long)atol(strtok(nullptr, ",")) * 1000UL;
-      ampEntrada_ = atof(strtok(nullptr, ","));
+      settle_duration_ms_ = (unsigned long)atol(strtok(nullptr, ",")) * 1000UL;
+      excitation_amplitude_ = atof(strtok(nullptr, ","));
       rng_ = Xorshift32((uint32_t)atol(strtok(nullptr, ",")));
-      if (Tlen_ <= 0) {
+      if (T_ <= 0) {
         Serial.println(F("ERR,T_INVALIDO"));
         return;
       }
@@ -178,26 +178,26 @@ private:
       return;
     }
 
-    if (strcmp(tok, "GO") == 0 && state_ == READY) {
-      float uApplied[M];
-      io_.setActuators(ubar_, uApplied);
-      t0_ = millis();
-      lastSettleMsg_ = 0;
-      for (int i = 0; i < N; i++) ybarAcc_[i] = 0;
-      ybarN_ = 0;
+    if (strcmp(token, "GO") == 0 && state_ == READY) {
+      float u_applied[M];
+      io_.setActuators(ubar_, u_applied);
+      phase_start_ms_ = millis();
+      last_settle_message_ms_ = 0;
+      for (int i = 0; i < N; i++) ybar_accumulator_[i] = 0;
+      ybar_sample_count_ = 0;
       state_ = SETTLE;
       Serial.println(F("ACK,GO"));
       return;
     }
 
-    if (strcmp(tok, "K") == 0 && state_ == WAITK) {
+    if (strcmp(token, "K") == 0 && state_ == WAITK) {
       for (int i = 0; i < M; i++)
         for (int j = 0; j < N; j++)
           K_[i][j] = atof(strtok(nullptr, ","));
-      for (int i = 0; i < N; i++) Tsp_[i] = atof(strtok(nullptr, ","));
-      ctrl_ms_ = (unsigned long)atol(strtok(nullptr, ",")) * 1000UL;
-      t0_ = millis();
-      nextTick_ = t0_;
+      for (int i = 0; i < N; i++) setpoint_[i] = atof(strtok(nullptr, ","));
+      control_duration_ms_ = (unsigned long)atol(strtok(nullptr, ",")) * 1000UL;
+      phase_start_ms_ = millis();
+      next_tick_ms_ = phase_start_ms_;
       state_ = CONTROL;
       Serial.println(F("ACK,K"));
       return;
@@ -205,78 +205,78 @@ private:
   }
 
   void tickSettle(unsigned long now) {
-    if (now - lastSettleMsg_ < 1000UL) return;
-    lastSettleMsg_ = now;
+    if (now - last_settle_message_ms_ < 1000UL) return;
+    last_settle_message_ms_ = now;
 
     float y[N];
     io_.readSensors(y);
     if (safetyStop(y)) return;
 
-    unsigned long el = now - t0_;
+    unsigned long elapsed_ms = now - phase_start_ms_;
     Serial.print(F("S,"));
-    Serial.print(el / 1000UL);
+    Serial.print(elapsed_ms / 1000UL);
     for (int i = 0; i < N; i++) {
       Serial.print(F(","));
       Serial.print(y[i], 2);
     }
     Serial.println();
 
-    if (settle_ms_ >= 10000UL && el >= settle_ms_ - 10000UL) {
-      for (int i = 0; i < N; i++) ybarAcc_[i] += y[i];
-      ybarN_++;
+    if (settle_duration_ms_ >= 10000UL && elapsed_ms >= settle_duration_ms_ - 10000UL) {
+      for (int i = 0; i < N; i++) ybar_accumulator_[i] += y[i];
+      ybar_sample_count_++;
     }
 
-    if (el >= settle_ms_) {
+    if (elapsed_ms >= settle_duration_ms_) {
       for (int i = 0; i < N; i++)
-        ybar_[i] = (ybarN_ > 0) ? (ybarAcc_[i] / ybarN_) : y[i];
+        ybar_[i] = (ybar_sample_count_ > 0) ? (ybar_accumulator_[i] / ybar_sample_count_) : y[i];
       Serial.print(F("EQ"));
       for (int i = 0; i < N; i++) {
         Serial.print(F(","));
         Serial.print(ybar_[i], 3);
       }
       Serial.println();
-      kstep_ = 0;
-      nextTick_ = now;
-      tExpStart_ = now;
+      sample_index_ = 0;
+      next_tick_ms_ = now;
+      experiment_start_ms_ = now;
       state_ = EXPERIMENT;
     }
   }
 
   void tickExperiment(unsigned long now) {
-    if ((long)(now - nextTick_) < 0) return;
+    if ((long)(now - next_tick_ms_) < 0) return;
 
     float y[N];
     io_.readSensors(y);
     if (safetyStop(y)) return;
 
-    if (kstep_ < Tlen_) {
-      float uDesired[M], uApplied[M];
+    if (sample_index_ < T_) {
+      float u_desired[M], u_applied[M];
       for (int j = 0; j < M; j++) {
-        float duVal = rng_.uniform(-ampEntrada_, ampEntrada_);
-        uDesired[j] = ubar_[j] + duVal;
+        float input_deviation = rng_.uniform(-excitation_amplitude_, excitation_amplitude_);
+        u_desired[j] = ubar_[j] + input_deviation;
       }
-      io_.setActuators(uDesired, uApplied);
+      io_.setActuators(u_desired, u_applied);
 
       Serial.print(F("D,"));
-      Serial.print(kstep_);
+      Serial.print(sample_index_);
       Serial.print(F(","));
-      Serial.print(now - tExpStart_);
+      Serial.print(now - experiment_start_ms_);
       for (int i = 0; i < N; i++) {
         Serial.print(F(","));
         Serial.print(y[i], 3);
       }
       for (int j = 0; j < M; j++) {
         Serial.print(F(","));
-        Serial.print(uApplied[j], 3);
+        Serial.print(u_applied[j], 3);
       }
       Serial.println();
-      kstep_++;
-      nextTick_ += dt_ms_;
+      sample_index_++;
+      next_tick_ms_ += dt_ms_;
     } else {
       Serial.print(F("D,"));
-      Serial.print(kstep_);
+      Serial.print(sample_index_);
       Serial.print(F(","));
-      Serial.print(now - tExpStart_);
+      Serial.print(now - experiment_start_ms_);
       for (int i = 0; i < N; i++) {
         Serial.print(F(","));
         Serial.print(y[i], 3);
@@ -284,44 +284,44 @@ private:
       for (int j = 0; j < M; j++) Serial.print(F(",nan"));
       Serial.println();
 
-      float uApplied[M];
-      io_.setActuators(ubar_, uApplied);  // segura o equilibrio enquanto o PC calcula
+      float u_applied[M];
+      io_.setActuators(ubar_, u_applied);  // segura o equilibrio enquanto o PC calcula
       state_ = WAITK;
       Serial.println(F("WAITK"));
     }
   }
 
   void tickControl(unsigned long now) {
-    if ((long)(now - nextTick_) < 0) return;
+    if ((long)(now - next_tick_ms_) < 0) return;
 
     float y[N];
     io_.readSensors(y);
     if (safetyStop(y)) return;
 
-    float uDesired[M];
+    float u_desired[M];
     for (int i = 0; i < M; i++) {
-      float acc = ubar_[i];
-      for (int j = 0; j < N; j++) acc += K_[i][j] * (y[j] - Tsp_[j]);
-      uDesired[i] = acc;
+      float accumulated_input = ubar_[i];
+      for (int j = 0; j < N; j++) accumulated_input += K_[i][j] * (y[j] - setpoint_[j]);
+      u_desired[i] = accumulated_input;
     }
-    float uApplied[M];
-    io_.setActuators(uDesired, uApplied);
+    float u_applied[M];
+    io_.setActuators(u_desired, u_applied);
 
-    unsigned long el = now - t0_;
+    unsigned long elapsed_ms = now - phase_start_ms_;
     Serial.print(F("C,"));
-    Serial.print(el / 1000.0, 1);
+    Serial.print(elapsed_ms / 1000.0, 1);
     for (int i = 0; i < N; i++) {
       Serial.print(F(","));
       Serial.print(y[i], 3);
     }
     for (int i = 0; i < M; i++) {
       Serial.print(F(","));
-      Serial.print(uApplied[i], 3);
+      Serial.print(u_applied[i], 3);
     }
     Serial.println();
-    nextTick_ += dt_ms_;
+    next_tick_ms_ += dt_ms_;
 
-    if (ctrl_ms_ > 0 && el >= ctrl_ms_) {
+    if (control_duration_ms_ > 0 && elapsed_ms >= control_duration_ms_) {
       io_.allOff();
       state_ = IDLE;
       Serial.println(F("END"));

@@ -30,13 +30,14 @@ class SerialPlant(Plant):
         self.proto = DataDrivenSerialProtocol(self.link, n=n, m=m)
         self.verbose = verbose
 
-    def run_experiment(self, T, dt, ubar, settle_s, amp_entrada, seed):
-        self.proto.send_config(T, dt, ubar, settle_s, amp_entrada, seed)
+    def run_experiment(self, T, dt, ubar, settle_duration_s, excitation_amplitude, seed):
+        self.proto.send_config(T, dt, ubar, settle_duration_s, excitation_amplitude, seed)
 
         if self.verbose:
             print(
-                f"\n[settle] assentando em ubar = {np.round(ubar, 2)} por {settle_s} s... "
-                f"(excitacao gerada no firmware: amp={amp_entrada}, seed={seed})"
+                f"\n[settle] assentando em ubar = {np.round(ubar, 2)} por "
+                f"{settle_duration_s} s... (excitacao gerada no firmware: "
+                f"excitation_amplitude={excitation_amplitude}, seed={seed})"
             )
 
         def on_settle_progress(line):
@@ -62,9 +63,10 @@ class SerialPlant(Plant):
 
         def on_sample(t_s, y_vals, u_vals):
             if self.verbose:
-                err = np.array(y_vals) - setpoint
+                tracking_error = np.array(y_vals) - setpoint
                 print(
-                    f"    t = {t_s:>7.1f} s | y = {y_vals} | u = {u_vals} | erro = {err}",
+                    f"    t = {t_s:>7.1f} s | y = {y_vals} | u = {u_vals} | "
+                    f"erro = {tracking_error}",
                     end="\r",
                 )
 

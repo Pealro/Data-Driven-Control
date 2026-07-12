@@ -6,6 +6,10 @@
 
     K = U0 Q (X0 Q)^-1   -- projetado SO com dados (nenhum modelo identificado).
 
+rho e uma margem de decaimento (regiao-disco de raio rho no plano complexo),
+uma generalizacao propria da eq. (15)/Teorema 3 do artigo -- NAO e o mesmo
+"alpha" de robustez a ruido dos Teoremas 5/6 (formula diferente).
+
 Generaliza para n estados e m entradas: Q e (T,n), K sai (m,n).
 """
 
@@ -22,40 +26,42 @@ class LMIInfeasibleError(RuntimeError):
 @dataclass
 class GainResult:
     K: np.ndarray       # (m, n) ganho data-driven
-    GK: np.ndarray      # (T, n) = Q (X0 Q)^-1, usado na verificacao de estabilidade
+    G_K: np.ndarray      # (T, n) = Q (X0 Q)^-1, usado na verificacao de estabilidade
     status: str
 
 
 def solve_gain(X0: np.ndarray, X1: np.ndarray, U0: np.ndarray, rho: float) -> GainResult:
     n, T = X0.shape
     Q = cp.Variable((T, n))
-    X0Q = X0 @ Q
-    X1Q = X1 @ Q
+    X0_Q = X0 @ Q
+    X1_Q = X1 @ Q
 
-    lmi = cp.bmat([[rho**2 * X0Q, X1Q],
-                   [X1Q.T,        X0Q]])
+    lmi = cp.bmat([[rho**2 * X0_Q, X1_Q],
+                   [X1_Q.T,        X0_Q]])
     constraints = [
         lmi >> 1e-6 * np.eye(2 * n),
-        X0Q >> 1e-6 * np.eye(n),
+        X0_Q >> 1e-6 * np.eye(n),
     ]
-    prob = cp.Problem(cp.Minimize(0), constraints)
+    problem = cp.Problem(cp.Minimize(0), constraints)
     try:
-        prob.solve(solver=cp.CLARABEL)
+        problem.solve(solver=cp.CLARABEL)
     except Exception:
-        prob.solve(solver=cp.SCS)
+        problem.solve(solver=cp.SCS)
 
-    if prob.status not in ("optimal", "optimal_inaccurate"):
-        raise LMIInfeasibleError(f"LMI infactivel -- revise os dados/parametros (status={prob.status}).")
+    if problem.status not in ("optimal", "optimal_inaccurate"):
+        raise LMIInfeasibleError(
+            f"LMI infactivel -- revise os dados/parametros (status={problem.status})."
+        )
 
-    Qv = Q.value
-    GK = Qv @ np.linalg.inv(X0 @ Qv)
-    K = U0 @ GK
-    return GainResult(K=K, GK=GK, status=prob.status)
+    Q_value = Q.value
+    G_K = Q_value @ np.linalg.inv(X0 @ Q_value)
+    K = U0 @ G_K
+    return GainResult(K=K, G_K=G_K, status=problem.status)
 
 
-def verify_stability(X1: np.ndarray, GK: np.ndarray, rho: float) -> tuple[np.ndarray, bool, bool]:
-    """Verificacao data-driven (sem A, B): Acl = X1 GK."""
-    eig = np.linalg.eigvals(X1 @ GK)
-    stable = bool(np.all(np.abs(eig) < 1.0))
-    within_margin = bool(np.all(np.abs(eig) < rho))
-    return eig, stable, within_margin
+def verify_stability(X1: np.ndarray, G_K: np.ndarray, rho: float) -> tuple[np.ndarray, bool, bool]:
+    """Verificacao data-driven (sem A, B): Acl = X1 G_K."""
+    closed_loop_eigenvalues = np.linalg.eigvals(X1 @ G_K)
+    stable = bool(np.all(np.abs(closed_loop_eigenvalues) < 1.0))
+    within_stability_margin = bool(np.all(np.abs(closed_loop_eigenvalues) < rho))
+    return closed_loop_eigenvalues, stable, within_stability_margin

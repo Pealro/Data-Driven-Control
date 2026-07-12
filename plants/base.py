@@ -17,20 +17,20 @@ class Plant(ABC):
         T: int,
         dt: float,
         ubar: np.ndarray,
-        settle_s: float,
-        amp_entrada: float,
+        settle_duration_s: float,
+        excitation_amplitude: float,
         seed: int | None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Assenta a planta em ubar por settle_s segundos, mede o equilibrio,
-        depois aplica T passos de ubar + du(k) ~ U(-amp_entrada, amp_entrada)
-        e coleta a resposta.
+        """Assenta a planta em ubar por settle_duration_s segundos, mede o
+        equilibrio, depois aplica T passos de ubar + delta_u(k) ~
+        U(-excitation_amplitude, excitation_amplitude) e coleta a resposta.
 
-        A geracao de du(k) e responsabilidade de CADA implementacao de
+        A geracao de delta_u(k) e responsabilidade de CADA implementacao de
         Plant, nao do chamador: uma planta serial manda a semente ao
-        firmware e ele gera du(k) sob demanda (sem guardar o vetor inteiro
-        em RAM -- ver plants/serial_plant.py); a planta simulada gera du
-        localmente em Python (datadriven.excitation). Isso evita que T seja
-        limitado pela RAM de um microcontrolador real.
+        firmware e ele gera delta_u(k) sob demanda (sem guardar o vetor
+        inteiro em RAM -- ver plants/serial_plant.py); a planta simulada gera
+        a excitacao localmente em Python (datadriven.excitation). Isso evita
+        que T seja limitado pela RAM de um microcontrolador real.
 
         Assentamento e experimento sao uma sequencia atomica (nao dois
         metodos separados): no protocolo serial real o Arduino so aceita GO

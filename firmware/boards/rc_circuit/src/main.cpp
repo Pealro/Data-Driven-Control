@@ -30,28 +30,28 @@ const float V_SAFE = 5.5;       // sanidade -- fisicamente inalcancavel com AREF
                                  // mantido caso a fiacao mude no futuro
 
 float readVoltage() {
-  long acc = 0;
-  for (int i = 0; i < 10; i++) acc += analogRead(PIN_OUT);
-  return (acc / 10.0) * AREF_V / 1024.0;
+  long analog_read_accumulator = 0;
+  for (int i = 0; i < 10; i++) analog_read_accumulator += analogRead(PIN_OUT);
+  return (analog_read_accumulator / 10.0) * AREF_V / 1024.0;
 }
 
 void readSensors(float y[N]) { y[0] = readVoltage(); }
 
-void setActuators(const float uDesired[M], float uApplied[M]) {
-  float pct = constrain(uDesired[0], 0.0, 100.0);
-  analogWrite(PIN_IN, (int)(pct * 255.0 / 100.0 + 0.5));
-  uApplied[0] = pct;
+void setActuators(const float u_desired[M], float u_applied[M]) {
+  float duty_percent = constrain(u_desired[0], 0.0, 100.0);
+  analogWrite(PIN_IN, (int)(duty_percent * 255.0 / 100.0 + 0.5));
+  u_applied[0] = duty_percent;
 }
 
 bool overSafetyLimit(const float y[N]) { return y[0] > V_SAFE; }
 
 void allOff() { analogWrite(PIN_IN, 0); }
 
-DataDrivenProtocol<N, M> dd({readSensors, setActuators, overSafetyLimit, allOff});
+DataDrivenProtocol<N, M> protocol({readSensors, setActuators, overSafetyLimit, allOff});
 
 void setup() {
   allOff();
-  dd.begin(115200);
+  protocol.begin(115200);
 }
 
-void loop() { dd.poll(); }
+void loop() { protocol.poll(); }

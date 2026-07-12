@@ -41,18 +41,18 @@ const float PMAX_Q1 = 200.0;  // potencia max. do heater 1 (0..255), padrao TCLa
 const float T_SAFE = 600.0;   // limite de seguranca [C] -> desliga tudo
 
 float readT1() {
-  long acc = 0;
-  for (int i = 0; i < 10; i++) acc += analogRead(PIN_T1);
-  float mV = (acc / 10.0) * MV_FULLSCALE / 1024.0;
-  return (mV - 500.0) / 10.0;
+  long analog_read_accumulator = 0;
+  for (int i = 0; i < 10; i++) analog_read_accumulator += analogRead(PIN_T1);
+  float millivolts = (analog_read_accumulator / 10.0) * MV_FULLSCALE / 1024.0;
+  return (millivolts - 500.0) / 10.0;
 }
 
 void readSensors(float y[N]) { y[0] = readT1(); }
 
-void setActuators(const float uDesired[M], float uApplied[M]) {
-  float pct = constrain(uDesired[0], 0.0, 100.0);
-  analogWrite(PIN_Q1, (int)(pct * PMAX_Q1 / 100.0 + 0.5));
-  uApplied[0] = pct;
+void setActuators(const float u_desired[M], float u_applied[M]) {
+  float duty_percent = constrain(u_desired[0], 0.0, 100.0);
+  analogWrite(PIN_Q1, (int)(duty_percent * PMAX_Q1 / 100.0 + 0.5));
+  u_applied[0] = duty_percent;
 }
 
 bool overSafetyLimit(const float y[N]) { return y[0] > T_SAFE; }
@@ -63,7 +63,7 @@ void allOff() {
   digitalWrite(PIN_LED, LOW);
 }
 
-DataDrivenProtocol<N, M> dd({readSensors, setActuators, overSafetyLimit, allOff});
+DataDrivenProtocol<N, M> protocol({readSensors, setActuators, overSafetyLimit, allOff});
 
 void setup() {
   //#if USE_EXTERNAL_AREF
@@ -71,7 +71,7 @@ void setup() {
   //#endif
   pinMode(PIN_LED, OUTPUT);
   allOff();
-  dd.begin(115200);
+  protocol.begin(115200);
 }
 
-void loop() { dd.poll(); }
+void loop() { protocol.poll(); }

@@ -5,20 +5,24 @@ rodam o firmware DataDrivenProtocol (firmware/lib/DataDrivenProtocol).
 Protocolo (115200 baud, linhas ASCII terminadas em '\\n'):
 
   PC -> Arduino:
-    CFG,<T>,<dt_ms>,<n>,<m>,<ubar_1..ubar_m>,<settle_s>
-    U,<k>,<du_1..du_m>
+    CFG,<T>,<dt_ms>,<n>,<m>,<ubar_1..ubar_m>,<settle_duration_s>,<excitation_amplitude>,<seed>
     GO
-    K,<K_11..K_1n,K_21..K_mn>,<Tsp_1..Tsp_n>,<ctrl_s>   (K linha-major, m x n)
+    K,<K_11..K_1n,K_21..K_mn>,<setpoint_1..setpoint_n>,<control_duration_s>   (K linha-major, m x n)
     X                                                     aborta a qualquer momento
 
   Arduino -> PC:
-    ACK,CFG | ACK,U,<k> | ACK,GO | ACK,K
+    ACK,CFG | ACK,GO | ACK,K
     S,<t_s>,<y_1..y_n>            streaming do assentamento (1 Hz)
     EQ,<ybar_1..ybar_n>           equilibrio medido
-    D,<k>,<y_1..y_n>,<u_1..u_m>   amostra do experimento (u = nan,..,nan no ultimo k)
+    D,<k>,<t_ms>,<y_1..y_n>,<u_1..u_m>   amostra do experimento (u = nan,..,nan no ultimo k)
     WAITK                         dados enviados, aguardando K
     C,<t_s>,<y_1..y_n>,<u_1..u_m> streaming do controle em tempo real
     END | ERR,<msg>
+
+A excitacao delta_u(k) nao e enviada pelo PC: o firmware a gera sob demanda
+com um PRNG determinístico semeado por <seed> (ver firmware/lib/
+DataDrivenProtocol/Xorshift32.h), entao nao ha buffer O(T) no Arduino e a
+janela T deixa de ser limitada pela RAM do microcontrolador.
 """
 
 import time
@@ -47,11 +51,11 @@ class SerialLink:
 
     def wait_for(self, prefix: str, echo: bool = False, timeout_s: float | None = None) -> str:
         """Le linhas ate encontrar uma que comece com `prefix`. Repassa ERR."""
-        t_start = time.time()
+        start_time = time.time()
         while True:
             line = self.read_line()
             if line == "":
-                if timeout_s is not None and time.time() - t_start > timeout_s:
+                if timeout_s is not None and time.time() - start_time > timeout_s:
                     raise TimeoutError(f"timeout esperando '{prefix}'")
                 continue
             if echo:
@@ -66,13 +70,7 @@ class SerialLink:
 
 
 class DataDrivenSerialProtocol:
-    """Implementa o protocolo vetorial CFG/GO/K/X <-> ACK/S/EQ/D/WAITK/C/END/ERR.
-
-    A excitacao du(k) nao e enviada pelo PC: o firmware a gera sob demanda
-    com um PRNG determinístico semeado por <seed> (ver firmware/lib/
-    DataDrivenProtocol/Xorshift32.h), entao nao ha buffer O(T) no Arduino e
-    a janela T deixa de ser limitada pela RAM do microcontrolador.
-    """
+    """Implementa o protocolo vetorial CFG/GO/K/X <-> ACK/S/EQ/D/WAITK/C/END/ERR."""
 
     def __init__(self, link: SerialLink, n: int, m: int):
         self.link = link
@@ -84,14 +82,14 @@ class DataDrivenSerialProtocol:
         T: int,
         dt_s: float,
         ubar: np.ndarray,
-        settle_s: float,
-        amp_entrada: float,
+        settle_duration_s: float,
+        excitation_amplitude: float,
         seed: int | None,
     ) -> None:
-        seed_val = 0 if seed is None else int(seed)
+        seed_value = 0 if seed is None else int(seed)
         self.link.send(
             f"CFG,{T},{int(dt_s * 1000)},{self.n},{self.m},{fmt_vec(ubar, 3)},"
-            f"{int(settle_s)},{amp_entrada:.4f},{seed_val}"
+            f"{int(settle_duration_s)},{excitation_amplitude:.4f},{seed_value}"
         )
         self.link.wait_for("ACK,CFG", timeout_s=10)
 
@@ -106,12 +104,14 @@ class DataDrivenSerialProtocol:
                 if on_progress:
                     on_progress(line)
             elif line.startswith("EQ,"):
-                vals = line.split(",")[1:]
-                return np.array([float(v) for v in vals])
+                equilibrium_values = line.split(",")[1:]
+                return np.array([float(v) for v in equilibrium_values])
             elif line.startswith("ERR"):
                 raise RuntimeError(f"Arduino reportou erro: {line}")
 
-    def collect_experiment(self, T: int, on_sample=None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def collect_experiment(
+        self, T: int, on_sample=None
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Retorna (t_raw, y_raw, u_raw). t_raw (T+1,) e o tempo REAL (s,
         medido via millis() no Arduino) de cada amostra desde o inicio do
         experimento -- permite detectar se o dt configurado foi realmente
@@ -144,8 +144,10 @@ class DataDrivenSerialProtocol:
         self, K: np.ndarray, setpoint: np.ndarray, duration_s: float, on_sample=None
     ) -> tuple[list[float], np.ndarray, np.ndarray]:
         n, m = self.n, self.m
-        k_flat = K.reshape(m, n).flatten(order="C")
-        self.link.send(f"K,{fmt_vec(k_flat, 6)},{fmt_vec(setpoint, 3)},{int(duration_s)}")
+        flattened_K = K.reshape(m, n).flatten(order="C")
+        self.link.send(
+            f"K,{fmt_vec(flattened_K, 6)},{fmt_vec(setpoint, 3)},{int(duration_s)}"
+        )
         self.link.wait_for("ACK,K", timeout_s=5)
 
         t_log: list[float] = []
@@ -170,9 +172,9 @@ class DataDrivenSerialProtocol:
             elif line.startswith("ERR"):
                 raise RuntimeError(f"Arduino reportou erro: {line}")
 
-        y_arr = np.array(y_log).T if y_log else np.zeros((n, 0))
-        u_arr = np.array(u_log).T if u_log else np.zeros((m, 0))
-        return t_log, y_arr, u_arr
+        y_log_matrix = np.array(y_log).T if y_log else np.zeros((n, 0))
+        u_log_matrix = np.array(u_log).T if u_log else np.zeros((m, 0))
+        return t_log, y_log_matrix, u_log_matrix
 
     def abort(self) -> None:
         self.link.send("X")
