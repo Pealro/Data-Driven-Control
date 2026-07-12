@@ -65,3 +65,11 @@ def verify_stability(X1: np.ndarray, G_K: np.ndarray, rho: float) -> tuple[np.nd
     stable = bool(np.all(np.abs(closed_loop_eigenvalues) < 1.0))
     within_stability_margin = bool(np.all(np.abs(closed_loop_eigenvalues) < rho))
     return closed_loop_eigenvalues, stable, within_stability_margin
+
+
+def closed_loop_eigen(X1: np.ndarray, G_K: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Autovalores E autovetores de Acl = X1 G_K (colunas de eigenvectors
+    correspondem, na ordem, aos autovalores retornados -- convencao do
+    numpy.linalg.eig)."""
+    eigenvalues, eigenvectors = np.linalg.eig(X1 @ G_K)
+    return eigenvalues, eigenvectors

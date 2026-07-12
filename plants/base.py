@@ -20,6 +20,7 @@ class Plant(ABC):
         settle_duration_s: float,
         excitation_amplitude: float,
         seed: int | None,
+        on_sample=None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Assenta a planta em ubar por settle_duration_s segundos, mede o
         equilibrio, depois aplica T passos de ubar + delta_u(k) ~
@@ -37,6 +38,10 @@ class Plant(ABC):
         apos CFG, e GO dispara assentamento + experimento em uma unica
         transicao de estados.
 
+        on_sample(t_s, y_vals, u_vals), se fornecido, e chamado a cada
+        amostra coletada (inclui a amostra k=0, com u_vals=ubar) -- usado
+        pelo plot ao vivo da aquisicao (live_plot.LiveAcquisitionPlot).
+
         Retorna (ybar, t_raw, y_raw, u_raw):
           ybar (n,)      estado de equilibrio medido;
           t_raw (T+1,)   tempo REAL de cada amostra (s) desde o inicio do
@@ -50,12 +55,27 @@ class Plant(ABC):
 
     @abstractmethod
     def run_control(
-        self, K: np.ndarray, setpoint: np.ndarray, duration_s: float
+        self,
+        K: np.ndarray,
+        setpoint: np.ndarray,
+        duration_s: float,
+        on_sample=None,
+        should_abort=None,
     ) -> tuple[list[float], np.ndarray, np.ndarray]:
         """Roda em malha fechada u = ubar + K (y - setpoint), com streaming.
 
         K: (m, n) ganho data-driven. duration_s == 0 roda indefinidamente
-        (ate Ctrl+C / comando de abortar).
+        (ate should_abort, Ctrl+C, ou comando de abortar).
+
+        on_sample(t_s, y_vals, u_vals), se fornecido, e chamado a cada
+        amostra e pode retornar um novo setpoint (n valores) para atualizar
+        a malha em tempo real sem reiniciar K nem o timing -- usado pelos
+        modos de controle interativo (setpoint via terminal, slider,
+        funcao de entrada). Retornar None mantem o setpoint atual.
+
+        should_abort(), se fornecido, e checado a cada amostra; se retornar
+        True, encerra o streaming imediatamente.
+
         Retorna (t_log, y_log, u_log): y_log (n, N), u_log (m, N).
         """
 

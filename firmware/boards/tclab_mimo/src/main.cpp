@@ -40,12 +40,12 @@ float readTemp(int pin) {
   return (millivolts - 500.0) / 10.0;
 }
 
-void readSensors(float y[N]) {
+void readSensors(float y[N], int active_n) {
   y[0] = readTemp(PIN_T1);
   y[1] = readTemp(PIN_T2);
 }
 
-void setActuators(const float u_desired[M], float u_applied[M]) {
+void setActuators(const float u_desired[M], float u_applied[M], int active_m) {
   float duty_percent_q1 = constrain(u_desired[0], 0.0, 100.0);
   float duty_percent_q2 = constrain(u_desired[1], 0.0, 100.0);
   analogWrite(PIN_Q1, (int)(duty_percent_q1 * PMAX_Q / 100.0 + 0.5));
@@ -54,7 +54,7 @@ void setActuators(const float u_desired[M], float u_applied[M]) {
   u_applied[1] = duty_percent_q2;
 }
 
-bool overSafetyLimit(const float y[N]) { return y[0] > T_SAFE || y[1] > T_SAFE; }
+bool overSafetyLimit(const float y[N], int active_n) { return y[0] > T_SAFE || y[1] > T_SAFE; }
 
 void allOff() {
   analogWrite(PIN_Q1, 0);

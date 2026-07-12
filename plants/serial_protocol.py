@@ -134,15 +134,32 @@ class DataDrivenSerialProtocol:
                 if u_vals and u_vals[0] != "nan":
                     u_raw[:, k] = [float(v) for v in u_vals]
                 if on_sample:
-                    on_sample(k, y_vals, u_vals)
+                    on_sample(k, t_raw[k], y_vals, u_vals)
             elif line.startswith("WAITK"):
                 return t_raw, y_raw, u_raw
             elif line.startswith("ERR"):
                 raise RuntimeError(f"Arduino reportou erro: {line}")
 
     def send_gain_and_stream(
-        self, K: np.ndarray, setpoint: np.ndarray, duration_s: float, on_sample=None
+        self,
+        K: np.ndarray,
+        setpoint: np.ndarray,
+        duration_s: float,
+        on_sample=None,
+        should_abort=None,
     ) -> tuple[list[float], np.ndarray, np.ndarray]:
+        """Roda a malha fechada (firmware autonomo, dt exato via millis()).
+
+        on_sample(t_s, y_vals, u_vals), se fornecido, e chamado a cada amostra
+        e pode retornar um novo setpoint (lista/array de n valores) para
+        atualizar a malha em tempo real (comando SP, sem reiniciar o timing
+        nem o ganho K) -- ou None para manter o setpoint atual. Usado pelos
+        modos de controle interativo (terminal, slider, funcao de entrada).
+
+        should_abort(), se fornecido, e checado a cada amostra (e durante
+        esperas sem dado); se retornar True, envia X e encerra o streaming.
+        duration_s=0 roda indefinidamente ate should_abort ou Ctrl+C/abort().
+        """
         n, m = self.n, self.m
         flattened_K = K.reshape(m, n).flatten(order="C")
         self.link.send(
@@ -156,6 +173,10 @@ class DataDrivenSerialProtocol:
         while True:
             line = self.link.read_line()
             if line == "":
+                if should_abort and should_abort():
+                    self.link.send("X")
+                    self.link.wait_for("END", timeout_s=5)
+                    break
                 continue
             if line.startswith("C,"):
                 parts = line.split(",")
@@ -166,9 +187,17 @@ class DataDrivenSerialProtocol:
                 y_log.append(y_vals)
                 u_log.append(u_vals)
                 if on_sample:
-                    on_sample(t_s, y_vals, u_vals)
+                    new_setpoint = on_sample(t_s, y_vals, u_vals)
+                    if new_setpoint is not None:
+                        self.link.send(f"SP,{fmt_vec(new_setpoint, 3)}")
+                if should_abort and should_abort():
+                    self.link.send("X")
+                    self.link.wait_for("END", timeout_s=5)
+                    break
             elif line.startswith("END"):
                 break
+            elif line.startswith("ACK,SP"):
+                continue
             elif line.startswith("ERR"):
                 raise RuntimeError(f"Arduino reportou erro: {line}")
 

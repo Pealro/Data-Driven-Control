@@ -4,6 +4,8 @@
 sem hardware -- util para testar o algoritmo data-driven offline.
 n, m sao inferidos do shape de A, B (MIMO generico)."""
 
+import time
+
 import numpy as np
 
 from datadriven.excitation import generate_excitation
@@ -21,7 +23,12 @@ class SimulatedLinearPlant(Plant):
         x0=None,
         seed: int | None = None,
         verbose: bool = True,
+        real_time: bool = False,
     ):
+        """real_time=True espaca os passos por dt (time.sleep) para imitar o
+        ritmo de uma planta real -- necessario para os modos de controle
+        interativo (Bloco D: slider/terminal/funcao) terem tempo real de
+        responder. Falso por padrao para nao pesar testes automatizados."""
         A = np.asarray(A, dtype=float)
         B = np.asarray(B, dtype=float)
         if A.shape[0] != A.shape[1]:
@@ -39,6 +46,7 @@ class SimulatedLinearPlant(Plant):
         self.rng = np.random.default_rng(seed)
         self.x = np.zeros(self.n) if x0 is None else np.asarray(x0, dtype=float).copy()
         self.verbose = verbose
+        self.real_time = real_time
         self._dt: float | None = None
         self._ubar: np.ndarray | None = None
 
@@ -57,7 +65,9 @@ class SimulatedLinearPlant(Plant):
         self.x = self.A @ self.x + self.B @ u_applied + noise
         return self.x.copy(), u_applied
 
-    def run_experiment(self, T, dt, ubar, settle_duration_s, excitation_amplitude, seed):
+    def run_experiment(
+        self, T, dt, ubar, settle_duration_s, excitation_amplitude, seed, on_sample=None
+    ):
         input_deviation = generate_excitation(T, self.m, excitation_amplitude, seed=seed)
 
         self._dt = dt
@@ -76,19 +86,25 @@ class SimulatedLinearPlant(Plant):
         y_raw = np.zeros((self.n, T + 1))
         u_raw = np.zeros((self.m, T))
         y_raw[:, 0] = self.x
+        if on_sample:
+            on_sample(t_raw[0], y_raw[:, 0].tolist(), self._ubar.tolist())
         for k in range(T):
+            if self.real_time:
+                time.sleep(dt)
             absolute_input = self._ubar + input_deviation[:, k]
             y_k, u_applied = self._step(absolute_input)
             y_raw[:, k + 1] = y_k
             u_raw[:, k] = u_applied
+            if on_sample:
+                on_sample(t_raw[k + 1], y_k.tolist(), u_applied.tolist())
         return ybar, t_raw, y_raw, u_raw
 
-    def run_control(self, K, setpoint, duration_s):
+    def run_control(self, K, setpoint, duration_s, on_sample=None, should_abort=None):
         if self._dt is None or self._ubar is None:
             raise RuntimeError("run_experiment() deve ser chamado antes de run_control().")
         dt = self._dt
         ubar = self._ubar
-        setpoint = np.asarray(setpoint, dtype=float)
+        current_setpoint = np.asarray(setpoint, dtype=float).copy()
         control_step_count = int(round(duration_s / dt)) if duration_s > 0 else None
 
         t_log: list[float] = []
@@ -97,12 +113,20 @@ class SimulatedLinearPlant(Plant):
         elapsed_time_s, k = 0.0, 0
         try:
             while control_step_count is None or k < control_step_count:
+                if self.real_time:
+                    time.sleep(dt)
                 y = self.x.copy()
-                absolute_input = ubar + K @ (y - setpoint)
+                absolute_input = ubar + K @ (y - current_setpoint)
                 _, u_applied = self._step(absolute_input)
                 t_log.append(elapsed_time_s)
                 y_log.append(y)
                 u_log.append(u_applied)
+                if on_sample:
+                    new_setpoint = on_sample(elapsed_time_s, y.tolist(), u_applied.tolist())
+                    if new_setpoint is not None:
+                        current_setpoint = np.asarray(new_setpoint, dtype=float)
+                if should_abort and should_abort():
+                    break
                 elapsed_time_s += dt
                 k += 1
         except KeyboardInterrupt:

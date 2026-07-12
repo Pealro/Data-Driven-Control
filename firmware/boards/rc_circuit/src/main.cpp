@@ -40,9 +40,9 @@ float readVoltage(int pin) {
   return (analog_read_accumulator / 10.0) * AREF_V / 1024.0;
 }
 
-void readSensors(float y[N]) { y[0] = readVoltage(PIN_OUT); }
+void readSensors(float y[N], int active_n) { y[0] = readVoltage(PIN_OUT); }
 
-void setActuators(const float u_desired[M], float u_applied[M]) {
+void setActuators(const float u_desired[M], float u_applied[M], int active_m) {
   float duty_percent = constrain(u_desired[0], 0.0, 100.0);
   analogWrite(PIN_IN, (int)(duty_percent * 255.0 / 100.0 + 0.5));
 
@@ -53,7 +53,7 @@ void setActuators(const float u_desired[M], float u_applied[M]) {
   u_applied[0] = (measured_voltage / AREF_V) * 100.0;
 }
 
-bool overSafetyLimit(const float y[N]) { return y[0] > V_SAFE; }
+bool overSafetyLimit(const float y[N], int active_n) { return y[0] > V_SAFE; }
 
 void allOff() { analogWrite(PIN_IN, 0); }
 

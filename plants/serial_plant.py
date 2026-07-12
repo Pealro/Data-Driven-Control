@@ -30,7 +30,9 @@ class SerialPlant(Plant):
         self.proto = DataDrivenSerialProtocol(self.link, n=n, m=m)
         self.verbose = verbose
 
-    def run_experiment(self, T, dt, ubar, settle_duration_s, excitation_amplitude, seed):
+    def run_experiment(
+        self, T, dt, ubar, settle_duration_s, excitation_amplitude, seed, on_sample=None
+    ):
         self.proto.send_config(T, dt, ubar, settle_duration_s, excitation_amplitude, seed)
 
         if self.verbose:
@@ -49,29 +51,40 @@ class SerialPlant(Plant):
         if self.verbose:
             print(f"\n    Equilibrio medido: ybar = {np.round(ybar, 3)}")
 
-        def on_sample(k, y_vals, u_vals):
+        def wrapped_on_sample(k, t_s, y_vals, u_vals):
             if self.verbose:
                 print(f"    k = {k:>3}/{T} | y = {y_vals} | u = {u_vals}", end="\r")
+            if on_sample:
+                on_sample(t_s, y_vals, u_vals)
 
-        t_raw, y_raw, u_raw = self.proto.collect_experiment(T, on_sample=on_sample)
+        t_raw, y_raw, u_raw = self.proto.collect_experiment(T, on_sample=wrapped_on_sample)
         if self.verbose:
             print("\n    Coleta concluida. Arduino aguardando K.")
         return ybar, t_raw, y_raw, u_raw
 
-    def run_control(self, K, setpoint, duration_s):
-        setpoint = np.asarray(setpoint, dtype=float)
+    def run_control(self, K, setpoint, duration_s, on_sample=None, should_abort=None):
+        current_setpoint = np.asarray(setpoint, dtype=float).copy()
 
-        def on_sample(t_s, y_vals, u_vals):
+        def wrapped_on_sample(t_s, y_vals, u_vals):
+            nonlocal current_setpoint
+            new_setpoint = on_sample(t_s, y_vals, u_vals) if on_sample else None
+            if new_setpoint is not None:
+                current_setpoint = np.asarray(new_setpoint, dtype=float)
             if self.verbose:
-                tracking_error = np.array(y_vals) - setpoint
+                tracking_error = np.array(y_vals) - current_setpoint
                 print(
                     f"    t = {t_s:>7.1f} s | y = {y_vals} | u = {u_vals} | "
                     f"erro = {tracking_error}",
                     end="\r",
                 )
+            return new_setpoint
 
         t_log, y_log, u_log = self.proto.send_gain_and_stream(
-            K, setpoint, duration_s, on_sample=on_sample
+            K,
+            current_setpoint,
+            duration_s,
+            on_sample=wrapped_on_sample,
+            should_abort=should_abort,
         )
         if self.verbose:
             print("\n    Controle encerrado pelo Arduino.")
