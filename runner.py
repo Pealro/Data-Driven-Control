@@ -115,6 +115,13 @@ def main():
             " (correto), mas considere reduzir excitation_amplitude."
         )
 
+    out_of_bounds_count = diagnostics.check_output_bounds(y_raw, session.y_min, session.y_max)
+    if out_of_bounds_count > 0:
+        print(
+            f"    AVISO: {out_of_bounds_count} amostras de estado fora dos limites conhecidos"
+            f" [y_min={session.y_min}, y_max={session.y_max}]."
+        )
+
     # ------------------------------------------------------------ Bloco C --
     X0, X1, U0 = assembly.build_X0_X1_U0(y_raw, u_raw, ybar, session.ubar)
 
@@ -204,25 +211,42 @@ def main():
             "Funcao de entrada f(t)",
         ],
     )
-    if mode == 0:
-        run_terminal_setpoint_mode(
-            plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp
-        )
-    elif mode == 1:
-        slider_range = (
-            float(ybar[0] - session.max_expected_state_deviation),
-            float(ybar[0] + session.max_expected_state_deviation),
-        )
-        run_slider_mode(
-            plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
-            slider_range,
-        )
-    else:
-        max_output = prompt_float("Valor maximo de saida da funcao f(t)", default=float(ybar[0] * 2))
-        run_function_mode(
-            plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
-            max_output,
-        )
+    try:
+        if mode == 0:
+            run_terminal_setpoint_mode(
+                plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp
+            )
+        elif mode == 1:
+            slider_range = (
+                session.y_min
+                if session.y_min is not None
+                else float(ybar[0] - session.max_expected_state_deviation),
+                session.y_max
+                if session.y_max is not None
+                else float(ybar[0] + session.max_expected_state_deviation),
+            )
+            run_slider_mode(
+                plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
+                slider_range,
+            )
+        else:
+            default_max_output = session.y_max if session.y_max is not None else float(ybar[0] * 2)
+            max_output = prompt_float(
+                "Valor maximo de saida da funcao f(t)", default=default_max_output
+            )
+            run_function_mode(
+                plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
+                max_output,
+            )
+    except Exception as error:
+        # rede de seguranca: um erro aqui (ex.: hiccup na serial) nao deveria
+        # derrubar o programa sem fechar a planta nem avisar o usuario.
+        print(f"\nAVISO: o teste de controle foi interrompido por um erro: {error}")
+        if hasattr(plant, "abort"):
+            try:
+                plant.abort()
+            except Exception:
+                pass
 
     plant.close()
     print("\nTeste concluido.")

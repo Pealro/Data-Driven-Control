@@ -174,8 +174,7 @@ class DataDrivenSerialProtocol:
             line = self.link.read_line()
             if line == "":
                 if should_abort and should_abort():
-                    self.link.send("X")
-                    self.link.wait_for("END", timeout_s=5)
+                    self._abort_and_wait_end()
                     break
                 continue
             if line.startswith("C,"):
@@ -191,8 +190,7 @@ class DataDrivenSerialProtocol:
                     if new_setpoint is not None:
                         self.link.send(f"SP,{fmt_vec(new_setpoint, 3)}")
                 if should_abort and should_abort():
-                    self.link.send("X")
-                    self.link.wait_for("END", timeout_s=5)
+                    self._abort_and_wait_end()
                     break
             elif line.startswith("END"):
                 break
@@ -204,6 +202,18 @@ class DataDrivenSerialProtocol:
         y_log_matrix = np.array(y_log).T if y_log else np.zeros((n, 0))
         u_log_matrix = np.array(u_log).T if u_log else np.zeros((m, 0))
         return t_log, y_log_matrix, u_log_matrix
+
+    def _abort_and_wait_end(self) -> None:
+        """Manda X e tenta confirmar o END do Arduino, mas NUNCA propaga
+        excecao daqui: o pedido de abortar do usuario tem que ser respeitado
+        mesmo se a confirmacao demorar/nao chegar (porta serial lenta,
+        amostra em transito, etc.) -- travar o programa numa situacao dessas
+        seria pior do que so encerrar sem a confirmacao."""
+        try:
+            self.link.send("X")
+            self.link.wait_for("END", timeout_s=5)
+        except (TimeoutError, RuntimeError):
+            pass
 
     def abort(self) -> None:
         self.link.send("X")
