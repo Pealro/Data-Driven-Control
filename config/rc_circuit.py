@@ -18,12 +18,12 @@ CONFIG = ExperimentConfig(
     T=2000,  # janela grande -- viavel agora que o firmware gera delta_u(k) sob demanda
              # (sem buffer O(T) em RAM, ver firmware/lib/DataDrivenProtocol)
     dt=0.005,  # confirmado com R/C ajustados (tau ~30-100ms, regra dt~tau/10)
-    excitation_amplitude=40.0,  # delta_u em torno de ubar=50% -> u entre 10% e 90%
+    excitation_amplitude=100.0,  # delta_u em torno de ubar=50% -> u entre 10% e 90%
     max_expected_state_deviation=6.0,  # V (folga acima da faixa fisica 0..5V)
     rho=0.90,
     ubar=np.array([50.0]),  # duty de equilibrio [%]
     settle_duration_s=2.0,
-    setpoint=np.array([4.1]),  # V
-    control_duration_s=1.0,
+    setpoint=np.array([5]),  # V
+    control_duration_s=2.0,
     seed=0,
 )

@@ -16,7 +16,7 @@ Protocolo (115200 baud, linhas ASCII terminadas em '\\n'):
     EQ,<ybar_1..ybar_n>           equilibrio medido
     D,<k>,<t_ms>,<y_1..y_n>,<u_1..u_m>   amostra do experimento (u = nan,..,nan no ultimo k)
     WAITK                         dados enviados, aguardando K
-    C,<t_s>,<y_1..y_n>,<u_1..u_m> streaming do controle em tempo real
+    C,<t_ms>,<y_1..y_n>,<u_1..u_m> streaming do controle em tempo real
     END | ERR,<msg>
 
 A excitacao delta_u(k) nao e enviada pelo PC: o firmware a gera sob demanda
@@ -159,7 +159,7 @@ class DataDrivenSerialProtocol:
                 continue
             if line.startswith("C,"):
                 parts = line.split(",")
-                t_s = float(parts[1])
+                t_s = float(parts[1]) / 1000.0  # firmware manda t_ms inteiro (ver DataDrivenProtocol.h)
                 y_vals = [float(v) for v in parts[2:2 + n]]
                 u_vals = [float(v) for v in parts[2 + n:2 + n + m]]
                 t_log.append(t_s)

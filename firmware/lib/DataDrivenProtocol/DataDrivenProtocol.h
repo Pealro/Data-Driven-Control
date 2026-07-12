@@ -46,7 +46,10 @@
  *                                   tempo de execucao, nao pelo relogio.
  *                                   u=nan,..,nan no ultimo k
  *     WAITK                         dados enviados, aguardando K
- *     C,<t_s>,<y_1..y_n>,<u_1..u_m> streaming do controle em tempo real
+ *     C,<t_ms>,<y_1..y_n>,<u_1..u_m> streaming do controle em tempo real
+ *                                   (t_ms = millis() reais desde o K, mesma
+ *                                   logica de precisao do t_ms em D acima --
+ *                                   nao usa mais 1 casa decimal em segundos)
  *     END | ERR,<msg>
  * ===========================================================================
  */
@@ -309,7 +312,7 @@ private:
 
     unsigned long elapsed_ms = now - phase_start_ms_;
     Serial.print(F("C,"));
-    Serial.print(elapsed_ms / 1000.0, 1);
+    Serial.print(elapsed_ms);  // ms inteiros, sem perda de precisao (era 1 casa decimal = 100ms)
     for (int i = 0; i < N; i++) {
       Serial.print(F(","));
       Serial.print(y[i], 3);

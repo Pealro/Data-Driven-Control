@@ -203,6 +203,16 @@ def main():
     finally:
         plant.close()
 
+    if len(t_log) > 1:
+        measured_control_dt, control_sampling_rate_deviates = diagnostics.check_sampling_rate(
+            np.array(t_log), cfg.dt
+        )
+        if control_sampling_rate_deviates:
+            print(
+                f"    AVISO: dt real medido na malha fechada ({measured_control_dt * 1000:.2f} ms)"
+                f" difere do dt configurado ({cfg.dt * 1000:.2f} ms) em mais de 20%."
+            )
+
     save_csvs(
         t_raw, y_raw, u_raw, ybar, cfg.ubar, t_log, y_log, u_log, out_prefix=args.out_prefix
     )
