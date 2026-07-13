@@ -18,20 +18,37 @@ CONTROL_PLOT_WINDOW_SIZE = 1000  # janela deslizante (Bloco D): mantem as ultima
 # o historico completo (t_log/y_log/u_log vem de plant.run_control, nao destes
 # buffers de plot)
 
+ACQUISITION_PLOT_WINDOW_SIZE = 1000  # janela deslizante (Bloco B), mesmo raciocinio
+ACQUISITION_U_REDRAW_EVERY = 20  # painel de entrada (u) so redesenha a cada N
+# amostras coletadas -- ele e o mais caro de atualizar (relim/autoscale a cada
+# chamada) e dt pode ser bem menor que refresh_interval_s (ex.: rc_circuit
+# dt=5ms), entao sem isso o laco de aquisicao trava tentando manter o plot em dia
+
 
 class LiveAcquisitionPlot:
     """3 paineis: entrada u(t), saida y(t), distribuicao (histograma) de u
-    coletado ate agora."""
+    coletado ate agora. O painel de u atualiza os dados a cada
+    ACQUISITION_U_REDRAW_EVERY amostras (nao a cada redraw) -- ver add_sample."""
 
-    def __init__(self, plant_name: str, n: int, m: int, refresh_interval_s: float = 0.2):
+    def __init__(
+        self,
+        plant_name: str,
+        n: int,
+        m: int,
+        refresh_interval_s: float = 0.2,
+        window_size: int = ACQUISITION_PLOT_WINDOW_SIZE,
+        u_redraw_every: int = ACQUISITION_U_REDRAW_EVERY,
+    ):
         self.n = n
         self.m = m
         self.refresh_interval_s = refresh_interval_s
         self._last_refresh = 0.0
+        self._u_redraw_every = u_redraw_every
+        self._sample_count = 0
 
-        self.t_buf: list[float] = []
-        self.y_buf: list[list[float]] = [[] for _ in range(n)]
-        self.u_buf: list[list[float]] = [[] for _ in range(m)]
+        self.t_buf: deque[float] = deque(maxlen=window_size)
+        self.y_buf: list[deque[float]] = [deque(maxlen=window_size) for _ in range(n)]
+        self.u_buf: list[deque[float]] = [deque(maxlen=window_size) for _ in range(m)]
 
         plt.ion()
         self.fig, (self.ax_u, self.ax_y, self.ax_hist) = plt.subplots(3, 1, figsize=(9, 9))
@@ -62,6 +79,7 @@ class LiveAcquisitionPlot:
             self.y_buf[i].append(float(y_vals[i]))
         for j in range(self.m):
             self.u_buf[j].append(float(u_vals[j]))
+        self._sample_count += 1
 
         now = time.monotonic()
         if now - self._last_refresh < self.refresh_interval_s:
@@ -69,11 +87,12 @@ class LiveAcquisitionPlot:
         self._last_refresh = now
         self.redraw()
 
-    def redraw(self) -> None:
-        for j, line in enumerate(self.u_lines):
-            line.set_data(self.t_buf, self.u_buf[j])
-        self.ax_u.relim()
-        self.ax_u.autoscale_view()
+    def redraw(self, force_u: bool = False) -> None:
+        if force_u or self._sample_count % self._u_redraw_every == 0:
+            for j, line in enumerate(self.u_lines):
+                line.set_data(self.t_buf, self.u_buf[j])
+            self.ax_u.relim()
+            self.ax_u.autoscale_view()
 
         for i, line in enumerate(self.y_lines):
             line.set_data(self.t_buf, self.y_buf[i])
@@ -91,7 +110,7 @@ class LiveAcquisitionPlot:
         self.fig.canvas.flush_events()
 
     def close(self, keep_open: bool = False, save_path: str | None = None) -> None:
-        self.redraw()  # garante que o estado final (todas as amostras) aparece
+        self.redraw(force_u=True)  # garante que o estado final (todas as amostras) aparece
         if save_path:
             self.fig.savefig(save_path, dpi=120)
         if not keep_open:
@@ -99,11 +118,13 @@ class LiveAcquisitionPlot:
 
 
 class LiveControlPlot:
-    """2 paineis (Bloco D): entrada u(t) (todos os canais) e y1(t) em malha
-    fechada, com o setpoint plotado como serie de dados (mantendo os valores
-    anteriores em cada instante, nao so o atual -- ver add_sample). Slider
-    opcional (modo "scrollbar do mouse") embutido na mesma figura -- arrastar
-    o slider atualiza o setpoint em tempo real.
+    """4 paineis (Bloco D): entrada u(t) (todos os canais), y1(t) em malha
+    fechada (com o setpoint plotado como serie de dados -- mantem os valores
+    anteriores em cada instante, nao so o atual, ver add_sample), energia de
+    controle instantanea (||u(k)||^2, todos os canais de entrada) e energia
+    do erro instantanea (||e(k)||^2, e = y - setpoint em todos os n estados
+    medidos). Slider opcional (modo "scrollbar do mouse") embutido na mesma
+    figura -- arrastar o slider atualiza o setpoint em tempo real.
 
     Os buffers usam uma janela deslizante de CONTROL_PLOT_WINDOW_SIZE
     amostras: o grafico mostra so as ultimas N e vai deslizando: o CSV salvo
@@ -128,6 +149,8 @@ class LiveControlPlot:
         self.y1_buf: deque[float] = deque(maxlen=window_size)
         self.u_buf: list[deque[float]] = [deque(maxlen=window_size) for _ in range(m)]
         self.setpoint_buf: deque[float] = deque(maxlen=window_size)
+        self.control_energy_buf: deque[float] = deque(maxlen=window_size)
+        self.error_energy_buf: deque[float] = deque(maxlen=window_size)
         self._current_setpoint = setpoint_initial
 
         self._slider_dirty = False
@@ -135,8 +158,10 @@ class LiveControlPlot:
 
         plt.ion()
         if with_slider:
-            self.fig, (self.ax_u, self.ax_y, self.ax_slider) = plt.subplots(
-                3, 1, figsize=(9, 8), gridspec_kw={"height_ratios": [3, 3, 1]}
+            self.fig, (
+                self.ax_u, self.ax_y, self.ax_control_energy, self.ax_error_energy, self.ax_slider,
+            ) = plt.subplots(
+                5, 1, figsize=(9, 13), gridspec_kw={"height_ratios": [3, 3, 2, 2, 1]}
             )
             self.slider = Slider(
                 self.ax_slider, "Setpoint", slider_range[0], slider_range[1],
@@ -144,7 +169,9 @@ class LiveControlPlot:
             )
             self.slider.on_changed(self._on_slider_changed)
         else:
-            self.fig, (self.ax_u, self.ax_y) = plt.subplots(2, 1, figsize=(9, 7))
+            self.fig, (
+                self.ax_u, self.ax_y, self.ax_control_energy, self.ax_error_energy,
+            ) = plt.subplots(4, 1, figsize=(9, 11))
             self.slider = None
 
         self.fig.suptitle(f"Controle ao vivo -- {plant_name}")
@@ -164,6 +191,16 @@ class LiveControlPlot:
         self.ax_y.legend(loc="upper right")
         self.ax_y.grid(alpha=0.3)
 
+        (self.control_energy_line,) = self.ax_control_energy.plot([], [], color="tab:orange")
+        self.ax_control_energy.set_title("Energia de controle instantanea ||u(k)||^2")
+        self.ax_control_energy.set_xlabel("tempo [s]")
+        self.ax_control_energy.grid(alpha=0.3)
+
+        (self.error_energy_line,) = self.ax_error_energy.plot([], [], color="tab:red")
+        self.ax_error_energy.set_title("Energia do erro instantanea ||e(k)||^2")
+        self.ax_error_energy.set_xlabel("tempo [s]")
+        self.ax_error_energy.grid(alpha=0.3)
+
         self.fig.tight_layout()
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
@@ -180,7 +217,17 @@ class LiveControlPlot:
             return self._slider_value
         return None
 
-    def add_sample(self, t_s: float, y1_val: float, u_vals, setpoint_val: float | None = None) -> None:
+    def add_sample(
+        self,
+        t_s: float,
+        y1_val: float,
+        u_vals,
+        setpoint_val: float | None = None,
+        error_vals=None,
+    ) -> None:
+        """error_vals, se fornecido, e o vetor e = y - setpoint em TODOS os n
+        estados medidos (nao so y1) -- usado so para a energia do erro
+        (ax_error_energy); o restante do plot continua y1-only."""
         if setpoint_val is not None:
             self._current_setpoint = setpoint_val
         self.t_buf.append(t_s)
@@ -192,6 +239,10 @@ class LiveControlPlot:
         # em degrau) que preserva os valores anteriores em cada instante,
         # em vez de uma linha horizontal que salta inteira para o novo nivel
         self.setpoint_buf.append(self._current_setpoint)
+        self.control_energy_buf.append(sum(float(v) ** 2 for v in u_vals))
+        self.error_energy_buf.append(
+            sum(float(v) ** 2 for v in error_vals) if error_vals is not None else 0.0
+        )
 
         now = time.monotonic()
         if now - self._last_refresh < self.refresh_interval_s:
@@ -209,6 +260,14 @@ class LiveControlPlot:
         self.setpoint_line.set_data(self.t_buf, self.setpoint_buf)
         self.ax_y.relim()
         self.ax_y.autoscale_view()
+
+        self.control_energy_line.set_data(self.t_buf, self.control_energy_buf)
+        self.ax_control_energy.relim()
+        self.ax_control_energy.autoscale_view()
+
+        self.error_energy_line.set_data(self.t_buf, self.error_energy_buf)
+        self.ax_error_energy.relim()
+        self.ax_error_energy.autoscale_view()
 
         self.fig.canvas.draw_idle()
         self.fig.canvas.flush_events()

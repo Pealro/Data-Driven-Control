@@ -91,22 +91,30 @@ def run_terminal_setpoint_mode(
     terminal = TerminalController(n=n, accept_setpoint_input=True)
     terminal.start()
     plot = LiveControlPlot(plant_name, m=plant.m, setpoint_initial=float(initial_setpoint[0]))
+    current_setpoint_physical = list(initial_setpoint)
 
     def on_sample(t_s, y_vals, u_vals):
+        nonlocal current_setpoint_physical
         y_physical = [calibration.y_raw_to_physical(v, y_physical_min, y_physical_max) for v in y_vals]
         u_physical = [calibration.u_raw_to_physical(v, u_physical_min, u_physical_max) for v in u_vals]
-        plot.add_sample(t_s, y_physical[0], u_physical)
         new_setpoint_physical = terminal.take_pending_setpoint()
-        if new_setpoint_physical is None:
-            return None
-        clamped_setpoint = [min(max(v, setpoint_min), setpoint_max) for v in new_setpoint_physical]
-        if clamped_setpoint != new_setpoint_physical:
-            print(f"    (setpoint fora da faixa [{setpoint_min}, {setpoint_max}] -- ajustado para {clamped_setpoint})")
-        plot.add_sample(t_s, y_physical[0], u_physical, setpoint_val=clamped_setpoint[0])
-        return [
-            calibration.y_physical_to_raw(v, y_physical_min, y_physical_max)
-            for v in clamped_setpoint
-        ]
+        setpoint_val_for_plot = None
+        raw_setpoint_to_send = None
+        if new_setpoint_physical is not None:
+            clamped_setpoint = [min(max(v, setpoint_min), setpoint_max) for v in new_setpoint_physical]
+            if clamped_setpoint != new_setpoint_physical:
+                print(f"    (setpoint fora da faixa [{setpoint_min}, {setpoint_max}] -- ajustado para {clamped_setpoint})")
+            current_setpoint_physical = clamped_setpoint
+            setpoint_val_for_plot = clamped_setpoint[0]
+            raw_setpoint_to_send = [
+                calibration.y_physical_to_raw(v, y_physical_min, y_physical_max)
+                for v in clamped_setpoint
+            ]
+        error_vals = [y_physical[i] - current_setpoint_physical[i] for i in range(n)]
+        plot.add_sample(
+            t_s, y_physical[0], u_physical, setpoint_val=setpoint_val_for_plot, error_vals=error_vals
+        )
+        return raw_setpoint_to_send
 
     initial_setpoint_raw = [
         calibration.y_physical_to_raw(v, y_physical_min, y_physical_max) for v in initial_setpoint
@@ -137,19 +145,27 @@ def run_slider_mode(
         with_slider=True,
         slider_range=slider_range,
     )
+    current_setpoint_physical = list(initial_setpoint)
 
     def on_sample(t_s, y_vals, u_vals):
+        nonlocal current_setpoint_physical
         y_physical = [calibration.y_raw_to_physical(v, y_physical_min, y_physical_max) for v in y_vals]
         u_physical = [calibration.u_raw_to_physical(v, u_physical_min, u_physical_max) for v in u_vals]
         new_value_physical = plot.take_slider_change()
+        setpoint_val_for_plot = None
+        raw_setpoint_to_send = None
         if new_value_physical is not None:
-            plot.add_sample(t_s, y_physical[0], u_physical, setpoint_val=new_value_physical)
+            current_setpoint_physical = [new_value_physical] * n
+            setpoint_val_for_plot = new_value_physical
             new_value_raw = calibration.y_physical_to_raw(
                 new_value_physical, y_physical_min, y_physical_max
             )
-            return [new_value_raw] * n
-        plot.add_sample(t_s, y_physical[0], u_physical)
-        return None
+            raw_setpoint_to_send = [new_value_raw] * n
+        error_vals = [y_physical[i] - current_setpoint_physical[i] for i in range(n)]
+        plot.add_sample(
+            t_s, y_physical[0], u_physical, setpoint_val=setpoint_val_for_plot, error_vals=error_vals
+        )
+        return raw_setpoint_to_send
 
     initial_setpoint_raw = [
         calibration.y_physical_to_raw(v, y_physical_min, y_physical_max) for v in initial_setpoint
@@ -183,22 +199,30 @@ def run_function_mode(
     terminal.start()
     print("Rodando com setpoint(t) = f(t). Digite 'e' e Enter no terminal para encerrar.")
     plot = LiveControlPlot(plant_name, m=plant.m, setpoint_initial=float(initial_setpoint[0]))
+    current_setpoint_physical = list(initial_setpoint)
 
     last_sent = [None]
 
     def on_sample(t_s, y_vals, u_vals):
+        nonlocal current_setpoint_physical
         y_physical = [calibration.y_raw_to_physical(v, y_physical_min, y_physical_max) for v in y_vals]
         u_physical = [calibration.u_raw_to_physical(v, u_physical_min, u_physical_max) for v in u_vals]
         new_value_physical = evaluate(t_s)
+        setpoint_val_for_plot = None
+        raw_setpoint_to_send = None
         if last_sent[0] is None or abs(new_value_physical - last_sent[0]) > SETPOINT_CHANGE_EPSILON:
             last_sent[0] = new_value_physical
-            plot.add_sample(t_s, y_physical[0], u_physical, setpoint_val=new_value_physical)
+            current_setpoint_physical = [new_value_physical] * n
+            setpoint_val_for_plot = new_value_physical
             new_value_raw = calibration.y_physical_to_raw(
                 new_value_physical, y_physical_min, y_physical_max
             )
-            return [new_value_raw] * n
-        plot.add_sample(t_s, y_physical[0], u_physical)
-        return None
+            raw_setpoint_to_send = [new_value_raw] * n
+        error_vals = [y_physical[i] - current_setpoint_physical[i] for i in range(n)]
+        plot.add_sample(
+            t_s, y_physical[0], u_physical, setpoint_val=setpoint_val_for_plot, error_vals=error_vals
+        )
+        return raw_setpoint_to_send
 
     initial_setpoint_raw = [
         calibration.y_physical_to_raw(v, y_physical_min, y_physical_max) for v in initial_setpoint

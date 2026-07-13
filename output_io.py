@@ -95,6 +95,16 @@ def save_input_test_csv(
     return csv_path
 
 
+def save_gain_csv(folder_path: str, plant_name: str, timestamp: str, K: np.ndarray) -> str:
+    """Salva o ganho data-driven K (m, n) na pasta do teste -- para
+    reaproveitar depois (ex.: recarregar K sem refazer a coleta/LMI). K
+    sempre em unidade crua (mesma convencao usada para falar com a planta/
+    firmware, ver calibration.py)."""
+    csv_path = os.path.join(folder_path, f"{plant_name}_{timestamp}_K.csv")
+    np.savetxt(csv_path, K, delimiter=",")
+    return csv_path
+
+
 def save_control_test_csv(
     folder_path: str,
     plant_name: str,

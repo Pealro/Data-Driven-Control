@@ -20,7 +20,7 @@ import wizard
 from control_modes import run_function_mode, run_slider_mode, run_terminal_setpoint_mode
 from datadriven import assembly, diagnostics, lmi
 from live_plot import LiveAcquisitionPlot
-from output_io import create_test_folder, save_input_test_csv
+from output_io import create_test_folder, save_gain_csv, save_input_test_csv
 from wizard import WizardSession, prompt_choice, prompt_float
 
 
@@ -196,6 +196,8 @@ def main():
         sys.exit(str(error))
     print(f"    LMI solve status: {result.status}")
     print(f"    Ganho data-driven K =\n{result.K}")
+    gain_csv_path = save_gain_csv(folder_path, session.plant_name, timestamp, result.K)
+    print(f"    Salvo: {gain_csv_path}")
 
     closed_loop_eigenvalues, stable, within_stability_margin = lmi.verify_stability(
         X1, result.G_K, session.rho
