@@ -117,6 +117,12 @@ class LiveAcquisitionPlot:
         # amostras cada (relevante com m=4, o maximo suportado pela planta
         # generica) sem crescer o custo por causa da quantidade de canais
         all_u = np.fromiter(chain.from_iterable(self.u_buf), dtype=float)
+        # a ULTIMA amostra do experimento sempre traz u=nan,...,nan (o
+        # firmware nao aplica entrada nesse passo final -- ver
+        # plants/serial_protocol.py, "u=nan,..,nan no ultimo k"). Um unico
+        # NaN em all_u faz min/max virar NaN e o np.histogram quebrar
+        # (autodetected range [nan, nan]) -- descarta antes de binar.
+        all_u = all_u[~np.isnan(all_u)]
         if all_u.size:
             counts, edges = np.histogram(all_u, bins=HIST_BIN_COUNT)
             bar_width = edges[1] - edges[0]
