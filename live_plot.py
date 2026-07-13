@@ -47,10 +47,12 @@ class LiveAcquisitionPlot:
         self.u_buf: list[deque[float]] = [deque(maxlen=window_size) for _ in range(m)]
 
         plt.ion()
-        self.fig, (self.ax_u, self.ax_y, self.ax_hist) = plt.subplots(3, 1, figsize=(9, 9))
+        self.fig, (self.ax_u, self.ax_y, self.ax_hist) = plt.subplots(
+            3, 1, figsize=(9, 10), constrained_layout=True
+        )
         self.fig.suptitle(f"Aquisicao ao vivo -- {plant_name}")
         self._remaining_label = self.fig.text(
-            0.99, 0.99, "", ha="right", va="top", fontsize=10,
+            0.99, 0.995, "", ha="right", va="top", fontsize=10,
             bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
         )
 
@@ -69,7 +71,6 @@ class LiveAcquisitionPlot:
         self.ax_hist.set_title("Distribuicao de u coletado")
         self.ax_hist.grid(alpha=0.3)
 
-        self.fig.tight_layout()
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
 
@@ -171,34 +172,37 @@ class LiveControlPlot:
         self._slider_dirty = False
         self._slider_value = setpoint_initial
 
-        panel_names = ["u", "y"]
-        height_ratios = [3, 3]
-        if show_instantaneous_power:
-            panel_names += ["control_power", "error_power"]
-            height_ratios += [2, 2]
-        if show_total_energy:
-            panel_names += ["control_energy", "error_energy"]
-            height_ratios += [2, 2]
+        # grade de 2 colunas (u|y na primeira linha, potencia/energia
+        # controle|erro nas linhas seguintes, slider ocupando a linha
+        # inteira por baixo) -- evita uma coluna unica muito alta quando
+        # varios paineis opcionais estao ativos, e constrained_layout=True
+        # recalcula o espacamento a cada redraw (tight_layout() so calcula
+        # uma vez, na criacao, e desalinha conforme os dados/legendas mudam)
+        n_rows = 1 + int(show_instantaneous_power) + int(show_total_energy)
+        height_ratios = [3] + [2] * (n_rows - 1)
         if with_slider:
-            panel_names += ["slider"]
-            height_ratios += [1]
+            height_ratios.append(1)
 
         plt.ion()
-        n_panels = len(panel_names)
-        self.fig, axes = plt.subplots(
-            n_panels, 1, figsize=(9, 3.2 * n_panels), gridspec_kw={"height_ratios": height_ratios}
+        self.fig = plt.figure(
+            figsize=(12, 3.4 * n_rows + (1.2 if with_slider else 0)), constrained_layout=True
         )
-        axes_by_name = dict(zip(panel_names, axes))
-        self.ax_u = axes_by_name["u"]
-        self.ax_y = axes_by_name["y"]
+        grid = self.fig.add_gridspec(
+            n_rows + int(with_slider), 2, height_ratios=height_ratios
+        )
+        self.ax_u = self.fig.add_subplot(grid[0, 0])
+        self.ax_y = self.fig.add_subplot(grid[0, 1])
+        row = 1
         if show_instantaneous_power:
-            self.ax_control_power = axes_by_name["control_power"]
-            self.ax_error_power = axes_by_name["error_power"]
+            self.ax_control_power = self.fig.add_subplot(grid[row, 0])
+            self.ax_error_power = self.fig.add_subplot(grid[row, 1])
+            row += 1
         if show_total_energy:
-            self.ax_control_energy = axes_by_name["control_energy"]
-            self.ax_error_energy = axes_by_name["error_energy"]
+            self.ax_control_energy = self.fig.add_subplot(grid[row, 0])
+            self.ax_error_energy = self.fig.add_subplot(grid[row, 1])
+            row += 1
         if with_slider:
-            self.ax_slider = axes_by_name["slider"]
+            self.ax_slider = self.fig.add_subplot(grid[row, :])
             self.slider = Slider(
                 self.ax_slider, "Setpoint", slider_range[0], slider_range[1],
                 valinit=setpoint_initial,
@@ -252,15 +256,17 @@ class LiveControlPlot:
             self.ax_error_energy.grid(alpha=0.3)
             self.error_energy_label = self._make_value_label(self.ax_error_energy)
 
-        self.fig.tight_layout()
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
 
     @staticmethod
     def _make_value_label(ax):
+        # canto superior ESQUERDO -- as legendas dos paineis usam
+        # loc="upper right", entao a label de valor no canto oposto evita
+        # sobrepor o texto da legenda
         return ax.text(
-            0.99, 0.95, "", transform=ax.transAxes, ha="right", va="top", fontsize=9,
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+            0.02, 0.95, "", transform=ax.transAxes, ha="left", va="top", fontsize=9,
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.85),
         )
 
     def _on_slider_changed(self, value: float) -> None:
