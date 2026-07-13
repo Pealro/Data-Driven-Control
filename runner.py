@@ -96,7 +96,7 @@ def main():
 
     # ------------------------------------------------------------ Bloco B --
     print(f"\n[1] Assentando e coletando experimento ({session.T} passos de {session.dt} s)...")
-    acquisition_plot = LiveAcquisitionPlot(session.plant_name, n, m)
+    acquisition_plot = LiveAcquisitionPlot(session.plant_name, n, m, session.T)
 
     def _acquisition_on_sample(t_s, y_vals, u_vals):
         # exibe em unidade fisica se a calibracao (Bloco A) foi definida;
@@ -250,6 +250,13 @@ def main():
         u_physical_max=session.u_physical_max,
     )
 
+    show_instantaneous_power = _confirm("Inserir grafico de potencia instantanea (controle e erro)?")
+    show_total_energy = _confirm("Inserir grafico de energia total (controle e erro)?")
+    energy_kwargs = dict(
+        show_instantaneous_power=show_instantaneous_power,
+        show_total_energy=show_total_energy,
+    )
+
     mode = prompt_choice(
         "Modo de teste de controle:",
         [
@@ -263,19 +270,19 @@ def main():
             run_terminal_setpoint_mode(
                 plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
                 setpoint_min, setpoint_max,
-                **calibration_kwargs,
+                **calibration_kwargs, **energy_kwargs,
             )
         elif mode == 1:
             run_slider_mode(
                 plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
                 (setpoint_min, setpoint_max),
-                **calibration_kwargs,
+                **calibration_kwargs, **energy_kwargs,
             )
         else:
             run_function_mode(
                 plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
                 setpoint_min, setpoint_max,
-                **calibration_kwargs,
+                **calibration_kwargs, **energy_kwargs,
             )
     except Exception as error:
         # rede de seguranca: um erro aqui (ex.: hiccup na serial) nao deveria

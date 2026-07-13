@@ -75,6 +75,7 @@ def run_terminal_setpoint_mode(
     plant, K, initial_setpoint, plant_name, folder_path, timestamp,
     setpoint_min, setpoint_max,
     y_physical_min=None, y_physical_max=None, u_physical_min=None, u_physical_max=None,
+    show_instantaneous_power=False, show_total_energy=False,
 ):
     """initial_setpoint e os valores digitados pelo usuario estao em unidade
     fisica (se calibrada); sao convertidos para unidade crua antes de
@@ -90,7 +91,10 @@ def run_terminal_setpoint_mode(
     )
     terminal = TerminalController(n=n, accept_setpoint_input=True)
     terminal.start()
-    plot = LiveControlPlot(plant_name, m=plant.m, setpoint_initial=float(initial_setpoint[0]))
+    plot = LiveControlPlot(
+        plant_name, m=plant.m, setpoint_initial=float(initial_setpoint[0]),
+        show_instantaneous_power=show_instantaneous_power, show_total_energy=show_total_energy,
+    )
     current_setpoint_physical = list(initial_setpoint)
 
     def on_sample(t_s, y_vals, u_vals):
@@ -131,6 +135,7 @@ def run_terminal_setpoint_mode(
 def run_slider_mode(
     plant, K, initial_setpoint, plant_name, folder_path, timestamp, slider_range,
     y_physical_min=None, y_physical_max=None, u_physical_min=None, u_physical_max=None,
+    show_instantaneous_power=False, show_total_energy=False,
 ):
     """slider_range e initial_setpoint estao em unidade fisica (se
     calibrada); convertidos para unidade crua antes de falar com a planta."""
@@ -144,6 +149,8 @@ def run_slider_mode(
         setpoint_initial=float(initial_setpoint[0]),
         with_slider=True,
         slider_range=slider_range,
+        show_instantaneous_power=show_instantaneous_power,
+        show_total_energy=show_total_energy,
     )
     current_setpoint_physical = list(initial_setpoint)
 
@@ -182,6 +189,7 @@ def run_slider_mode(
 def run_function_mode(
     plant, K, initial_setpoint, plant_name, folder_path, timestamp, setpoint_min, setpoint_max,
     y_physical_min=None, y_physical_max=None, u_physical_min=None, u_physical_max=None,
+    show_instantaneous_power=False, show_total_energy=False,
 ):
     """f(t) e initial_setpoint estao em unidade fisica (se calibrada);
     convertidos para unidade crua antes de falar com a planta.
@@ -198,7 +206,10 @@ def run_function_mode(
     terminal = TerminalController(n=n, accept_setpoint_input=False)
     terminal.start()
     print("Rodando com setpoint(t) = f(t). Digite 'e' e Enter no terminal para encerrar.")
-    plot = LiveControlPlot(plant_name, m=plant.m, setpoint_initial=float(initial_setpoint[0]))
+    plot = LiveControlPlot(
+        plant_name, m=plant.m, setpoint_initial=float(initial_setpoint[0]),
+        show_instantaneous_power=show_instantaneous_power, show_total_energy=show_total_energy,
+    )
     current_setpoint_physical = list(initial_setpoint)
 
     last_sent = [None]
