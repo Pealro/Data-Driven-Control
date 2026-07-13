@@ -75,7 +75,6 @@ def run_terminal_setpoint_mode(
     plant, K, initial_setpoint, plant_name, folder_path, timestamp,
     setpoint_min, setpoint_max,
     y_physical_min=None, y_physical_max=None, u_physical_min=None, u_physical_max=None,
-    show_instantaneous_power=False, show_total_energy=False,
 ):
     """initial_setpoint e os valores digitados pelo usuario estao em unidade
     fisica (se calibrada); sao convertidos para unidade crua antes de
@@ -91,14 +90,9 @@ def run_terminal_setpoint_mode(
     )
     terminal = TerminalController(n=n, accept_setpoint_input=True)
     terminal.start()
-    plot = LiveControlPlot(
-        plant_name, m=plant.m, setpoint_initial=float(initial_setpoint[0]),
-        show_instantaneous_power=show_instantaneous_power, show_total_energy=show_total_energy,
-    )
-    current_setpoint_physical = list(initial_setpoint)
+    plot = LiveControlPlot(plant_name, m=plant.m, setpoint_initial=float(initial_setpoint[0]))
 
     def on_sample(t_s, y_vals, u_vals):
-        nonlocal current_setpoint_physical
         y_physical = [calibration.y_raw_to_physical(v, y_physical_min, y_physical_max) for v in y_vals]
         u_physical = [calibration.u_raw_to_physical(v, u_physical_min, u_physical_max) for v in u_vals]
         new_setpoint_physical = terminal.take_pending_setpoint()
@@ -108,16 +102,12 @@ def run_terminal_setpoint_mode(
             clamped_setpoint = [min(max(v, setpoint_min), setpoint_max) for v in new_setpoint_physical]
             if clamped_setpoint != new_setpoint_physical:
                 print(f"    (setpoint fora da faixa [{setpoint_min}, {setpoint_max}] -- ajustado para {clamped_setpoint})")
-            current_setpoint_physical = clamped_setpoint
             setpoint_val_for_plot = clamped_setpoint[0]
             raw_setpoint_to_send = [
                 calibration.y_physical_to_raw(v, y_physical_min, y_physical_max)
                 for v in clamped_setpoint
             ]
-        error_vals = [y_physical[i] - current_setpoint_physical[i] for i in range(n)]
-        plot.add_sample(
-            t_s, y_physical[0], u_physical, setpoint_val=setpoint_val_for_plot, error_vals=error_vals
-        )
+        plot.add_sample(t_s, y_physical[0], u_physical, setpoint_val=setpoint_val_for_plot)
         return raw_setpoint_to_send
 
     initial_setpoint_raw = [
@@ -135,7 +125,6 @@ def run_terminal_setpoint_mode(
 def run_slider_mode(
     plant, K, initial_setpoint, plant_name, folder_path, timestamp, slider_range,
     y_physical_min=None, y_physical_max=None, u_physical_min=None, u_physical_max=None,
-    show_instantaneous_power=False, show_total_energy=False,
 ):
     """slider_range e initial_setpoint estao em unidade fisica (se
     calibrada); convertidos para unidade crua antes de falar com a planta."""
@@ -149,30 +138,20 @@ def run_slider_mode(
         setpoint_initial=float(initial_setpoint[0]),
         with_slider=True,
         slider_range=slider_range,
-        show_instantaneous_power=show_instantaneous_power,
-        show_total_energy=show_total_energy,
     )
-    current_setpoint_physical = list(initial_setpoint)
 
     def on_sample(t_s, y_vals, u_vals):
-        nonlocal current_setpoint_physical
         y_physical = [calibration.y_raw_to_physical(v, y_physical_min, y_physical_max) for v in y_vals]
         u_physical = [calibration.u_raw_to_physical(v, u_physical_min, u_physical_max) for v in u_vals]
         new_value_physical = plot.take_slider_change()
-        setpoint_val_for_plot = None
-        raw_setpoint_to_send = None
         if new_value_physical is not None:
-            current_setpoint_physical = [new_value_physical] * n
-            setpoint_val_for_plot = new_value_physical
+            plot.add_sample(t_s, y_physical[0], u_physical, setpoint_val=new_value_physical)
             new_value_raw = calibration.y_physical_to_raw(
                 new_value_physical, y_physical_min, y_physical_max
             )
-            raw_setpoint_to_send = [new_value_raw] * n
-        error_vals = [y_physical[i] - current_setpoint_physical[i] for i in range(n)]
-        plot.add_sample(
-            t_s, y_physical[0], u_physical, setpoint_val=setpoint_val_for_plot, error_vals=error_vals
-        )
-        return raw_setpoint_to_send
+            return [new_value_raw] * n
+        plot.add_sample(t_s, y_physical[0], u_physical)
+        return None
 
     initial_setpoint_raw = [
         calibration.y_physical_to_raw(v, y_physical_min, y_physical_max) for v in initial_setpoint
@@ -189,7 +168,6 @@ def run_slider_mode(
 def run_function_mode(
     plant, K, initial_setpoint, plant_name, folder_path, timestamp, setpoint_min, setpoint_max,
     y_physical_min=None, y_physical_max=None, u_physical_min=None, u_physical_max=None,
-    show_instantaneous_power=False, show_total_energy=False,
 ):
     """f(t) e initial_setpoint estao em unidade fisica (se calibrada);
     convertidos para unidade crua antes de falar com a planta.
@@ -206,34 +184,23 @@ def run_function_mode(
     terminal = TerminalController(n=n, accept_setpoint_input=False)
     terminal.start()
     print("Rodando com setpoint(t) = f(t). Digite 'e' e Enter no terminal para encerrar.")
-    plot = LiveControlPlot(
-        plant_name, m=plant.m, setpoint_initial=float(initial_setpoint[0]),
-        show_instantaneous_power=show_instantaneous_power, show_total_energy=show_total_energy,
-    )
-    current_setpoint_physical = list(initial_setpoint)
+    plot = LiveControlPlot(plant_name, m=plant.m, setpoint_initial=float(initial_setpoint[0]))
 
     last_sent = [None]
 
     def on_sample(t_s, y_vals, u_vals):
-        nonlocal current_setpoint_physical
         y_physical = [calibration.y_raw_to_physical(v, y_physical_min, y_physical_max) for v in y_vals]
         u_physical = [calibration.u_raw_to_physical(v, u_physical_min, u_physical_max) for v in u_vals]
         new_value_physical = evaluate(t_s)
-        setpoint_val_for_plot = None
-        raw_setpoint_to_send = None
         if last_sent[0] is None or abs(new_value_physical - last_sent[0]) > SETPOINT_CHANGE_EPSILON:
             last_sent[0] = new_value_physical
-            current_setpoint_physical = [new_value_physical] * n
-            setpoint_val_for_plot = new_value_physical
+            plot.add_sample(t_s, y_physical[0], u_physical, setpoint_val=new_value_physical)
             new_value_raw = calibration.y_physical_to_raw(
                 new_value_physical, y_physical_min, y_physical_max
             )
-            raw_setpoint_to_send = [new_value_raw] * n
-        error_vals = [y_physical[i] - current_setpoint_physical[i] for i in range(n)]
-        plot.add_sample(
-            t_s, y_physical[0], u_physical, setpoint_val=setpoint_val_for_plot, error_vals=error_vals
-        )
-        return raw_setpoint_to_send
+            return [new_value_raw] * n
+        plot.add_sample(t_s, y_physical[0], u_physical)
+        return None
 
     initial_setpoint_raw = [
         calibration.y_physical_to_raw(v, y_physical_min, y_physical_max) for v in initial_setpoint

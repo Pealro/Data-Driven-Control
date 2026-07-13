@@ -250,13 +250,6 @@ def main():
         u_physical_max=session.u_physical_max,
     )
 
-    show_instantaneous_power = _confirm("Inserir grafico de potencia instantanea (controle e erro)?")
-    show_total_energy = _confirm("Inserir grafico de energia total (controle e erro)?")
-    energy_kwargs = dict(
-        show_instantaneous_power=show_instantaneous_power,
-        show_total_energy=show_total_energy,
-    )
-
     mode = prompt_choice(
         "Modo de teste de controle:",
         [
@@ -270,19 +263,19 @@ def main():
             run_terminal_setpoint_mode(
                 plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
                 setpoint_min, setpoint_max,
-                **calibration_kwargs, **energy_kwargs,
+                **calibration_kwargs,
             )
         elif mode == 1:
             run_slider_mode(
                 plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
                 (setpoint_min, setpoint_max),
-                **calibration_kwargs, **energy_kwargs,
+                **calibration_kwargs,
             )
         else:
             run_function_mode(
                 plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
                 setpoint_min, setpoint_max,
-                **calibration_kwargs, **energy_kwargs,
+                **calibration_kwargs,
             )
     except Exception as error:
         # rede de seguranca: um erro aqui (ex.: hiccup na serial) nao deveria

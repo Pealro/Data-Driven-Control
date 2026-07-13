@@ -6,8 +6,10 @@ timestamp do firmware nesta sessao."""
 
 import time
 from collections import deque
+from itertools import chain
 
 import matplotlib
+import numpy as np
 
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
@@ -32,7 +34,11 @@ class LiveAcquisitionPlot:
         n: int,
         m: int,
         T: int,
-        refresh_interval_s: float = 0.2,
+        # folga extra em relacao ao antigo 0.2s -- headroom para o pior
+        # caso de m=4,n=4 (8 linhas + histograma), mesmo raciocinio do
+        # throttle do Bloco D: redraw() nao pode competir com a leitura da
+        # serial.
+        refresh_interval_s: float = 0.3,
         window_size: int = ACQUISITION_PLOT_WINDOW_SIZE,
     ):
         self.n = n
@@ -100,8 +106,12 @@ class LiveAcquisitionPlot:
         self.ax_y.autoscale_view()
 
         self.ax_hist.cla()
-        all_u = [value for channel in self.u_buf for value in channel]
-        if all_u:
+        # np.fromiter + itertools.chain em vez de list comprehension
+        # aninhada -- mais rapido para achatar m canais * ate window_size
+        # amostras cada (relevante com m=4, o maximo suportado pela planta
+        # generica) sem crescer o custo por causa da quantidade de canais
+        all_u = np.fromiter(chain.from_iterable(self.u_buf), dtype=float)
+        if all_u.size:
             self.ax_hist.hist(all_u, bins=20, color="tab:red", alpha=0.75)
         self.ax_hist.set_title("Distribuicao de u coletado")
         self.ax_hist.grid(alpha=0.3)
@@ -121,18 +131,20 @@ class LiveAcquisitionPlot:
 
 
 class LiveControlPlot:
-    """Paineis (Bloco D), sempre presentes: entrada u(t) (todos os canais) e
-    y1(t) em malha fechada, com o setpoint plotado como serie de dados
-    (mantem os valores anteriores em cada instante, nao so o atual -- ver
-    add_sample). Dois pares de paineis opcionais, cada um cobrindo controle
-    E erro:
-      show_instantaneous_power -- potencia instantanea, ||u(k)||^2/||e(k)||^2
-        por amostra (nao acumula);
-      show_total_energy -- energia total, soma corrida de ||u(k)||^2/||e(k)||^2
-        desde o inicio do teste (energia no sentido formal de sinal).
-    e = y - setpoint em TODOS os n estados medidos (nao so y1). Cada painel
-    tem uma label no canto mostrando o valor atual (instantaneo). Slider
-    opcional (modo "scrollbar do mouse") embutido na mesma figura.
+    """2 paineis (Bloco D): entrada u(t) (todos os canais) e y1(t) em malha
+    fechada, com o setpoint plotado como serie de dados (mantem os valores
+    anteriores em cada instante, nao so o atual -- ver add_sample). Slider
+    opcional (modo "scrollbar do mouse") embutido na mesma figura -- arrastar
+    o slider atualiza o setpoint em tempo real. Cada painel tem uma label no
+    canto mostrando o valor atual.
+
+    Numero de paineis fica FIXO em 2 (ou 3 com slider) independente de m
+    (numero de entradas) -- so a quantidade de LINHAS dentro do painel de u
+    cresce com m, o que e barato (set_data). O custo caro de redraw()
+    (relayout do matplotlib) escala com o numero de PAINEIS, nao de canais
+    -- por isso nao ha aqui paineis extras opcionais que multiplicariam
+    esse custo (ver historico: uma versao anterior tinha ate 6 paineis e
+    isso chegou a travar o laco de controle real, nao so o grafico).
 
     Os buffers usam uma janela deslizante de CONTROL_PLOT_WINDOW_SIZE
     amostras: o grafico mostra so as ultimas N e vai deslizando: o CSV salvo
@@ -144,71 +156,45 @@ class LiveControlPlot:
         plant_name: str,
         m: int,
         setpoint_initial: float,
-        refresh_interval_s: float = 0.15,
+        # throttle frouxo (nao a cada amostra) para nao competir com o laco
+        # de leitura da serial -- se redraw() atrasar a leitura, o buffer de
+        # saida do Arduino enche e o Serial.print() do firmware trava
+        # esperando espaco, congelando o CONTROLE real, nao so o grafico.
+        # add_sample sempre grava no buffer independente do redraw, entao
+        # nenhum dado se perde por causa desse throttle.
+        refresh_interval_s: float = 0.3,
         with_slider: bool = False,
         slider_range: tuple[float, float] = (0.0, 100.0),
         window_size: int = CONTROL_PLOT_WINDOW_SIZE,
-        show_instantaneous_power: bool = False,
-        show_total_energy: bool = False,
     ):
         self.m = m
         self.refresh_interval_s = refresh_interval_s
         self._last_refresh = 0.0
-        self.show_instantaneous_power = show_instantaneous_power
-        self.show_total_energy = show_total_energy
 
         self.t_buf: deque[float] = deque(maxlen=window_size)
         self.y1_buf: deque[float] = deque(maxlen=window_size)
         self.u_buf: list[deque[float]] = [deque(maxlen=window_size) for _ in range(m)]
         self.setpoint_buf: deque[float] = deque(maxlen=window_size)
-        self.control_power_buf: deque[float] = deque(maxlen=window_size)
-        self.error_power_buf: deque[float] = deque(maxlen=window_size)
-        self.control_energy_buf: deque[float] = deque(maxlen=window_size)
-        self.error_energy_buf: deque[float] = deque(maxlen=window_size)
         self._current_setpoint = setpoint_initial
-        self._control_energy_total = 0.0
-        self._error_energy_total = 0.0
 
         self._slider_dirty = False
         self._slider_value = setpoint_initial
 
-        # grade de 2 colunas (u|y na primeira linha, potencia/energia
-        # controle|erro nas linhas seguintes, slider ocupando a linha
-        # inteira por baixo) -- evita uma coluna unica muito alta quando
-        # varios paineis opcionais estao ativos, e constrained_layout=True
-        # recalcula o espacamento a cada redraw (tight_layout() so calcula
-        # uma vez, na criacao, e desalinha conforme os dados/legendas mudam)
-        n_rows = 1 + int(show_instantaneous_power) + int(show_total_energy)
-        height_ratios = [3] + [2] * (n_rows - 1)
-        if with_slider:
-            height_ratios.append(1)
-
         plt.ion()
-        self.fig = plt.figure(
-            figsize=(12, 3.4 * n_rows + (1.2 if with_slider else 0)), constrained_layout=True
-        )
-        grid = self.fig.add_gridspec(
-            n_rows + int(with_slider), 2, height_ratios=height_ratios
-        )
-        self.ax_u = self.fig.add_subplot(grid[0, 0])
-        self.ax_y = self.fig.add_subplot(grid[0, 1])
-        row = 1
-        if show_instantaneous_power:
-            self.ax_control_power = self.fig.add_subplot(grid[row, 0])
-            self.ax_error_power = self.fig.add_subplot(grid[row, 1])
-            row += 1
-        if show_total_energy:
-            self.ax_control_energy = self.fig.add_subplot(grid[row, 0])
-            self.ax_error_energy = self.fig.add_subplot(grid[row, 1])
-            row += 1
         if with_slider:
-            self.ax_slider = self.fig.add_subplot(grid[row, :])
+            self.fig, (self.ax_u, self.ax_y, self.ax_slider) = plt.subplots(
+                3, 1, figsize=(9, 8), gridspec_kw={"height_ratios": [3, 3, 1]},
+                constrained_layout=True,
+            )
             self.slider = Slider(
                 self.ax_slider, "Setpoint", slider_range[0], slider_range[1],
                 valinit=setpoint_initial,
             )
             self.slider.on_changed(self._on_slider_changed)
         else:
+            self.fig, (self.ax_u, self.ax_y) = plt.subplots(
+                2, 1, figsize=(9, 7), constrained_layout=True
+            )
             self.slider = None
 
         self.fig.suptitle(f"Controle ao vivo -- {plant_name}")
@@ -229,32 +215,6 @@ class LiveControlPlot:
         self.ax_y.legend(loc="upper right")
         self.ax_y.grid(alpha=0.3)
         self.y_label = self._make_value_label(self.ax_y)
-
-        if show_instantaneous_power:
-            (self.control_power_line,) = self.ax_control_power.plot([], [], color="tab:orange")
-            self.ax_control_power.set_title("Potencia instantanea de controle -- ||u(k)||^2")
-            self.ax_control_power.set_xlabel("tempo [s]")
-            self.ax_control_power.grid(alpha=0.3)
-            self.control_power_label = self._make_value_label(self.ax_control_power)
-
-            (self.error_power_line,) = self.ax_error_power.plot([], [], color="tab:red")
-            self.ax_error_power.set_title("Potencia instantanea do erro -- ||e(k)||^2")
-            self.ax_error_power.set_xlabel("tempo [s]")
-            self.ax_error_power.grid(alpha=0.3)
-            self.error_power_label = self._make_value_label(self.ax_error_power)
-
-        if show_total_energy:
-            (self.control_energy_line,) = self.ax_control_energy.plot([], [], color="tab:orange")
-            self.ax_control_energy.set_title("Energia total de controle -- soma ||u(k)||^2")
-            self.ax_control_energy.set_xlabel("tempo [s]")
-            self.ax_control_energy.grid(alpha=0.3)
-            self.control_energy_label = self._make_value_label(self.ax_control_energy)
-
-            (self.error_energy_line,) = self.ax_error_energy.plot([], [], color="tab:red")
-            self.ax_error_energy.set_title("Energia total do erro -- soma ||e(k)||^2")
-            self.ax_error_energy.set_xlabel("tempo [s]")
-            self.ax_error_energy.grid(alpha=0.3)
-            self.error_energy_label = self._make_value_label(self.ax_error_energy)
 
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
@@ -281,17 +241,7 @@ class LiveControlPlot:
             return self._slider_value
         return None
 
-    def add_sample(
-        self,
-        t_s: float,
-        y1_val: float,
-        u_vals,
-        setpoint_val: float | None = None,
-        error_vals=None,
-    ) -> None:
-        """error_vals, se fornecido, e o vetor e = y - setpoint em TODOS os n
-        estados medidos (nao so y1) -- usado para potencia/energia do erro;
-        o restante do plot continua y1-only."""
+    def add_sample(self, t_s: float, y1_val: float, u_vals, setpoint_val: float | None = None) -> None:
         if setpoint_val is not None:
             self._current_setpoint = setpoint_val
         self.t_buf.append(t_s)
@@ -303,17 +253,6 @@ class LiveControlPlot:
         # em degrau) que preserva os valores anteriores em cada instante,
         # em vez de uma linha horizontal que salta inteira para o novo nivel
         self.setpoint_buf.append(self._current_setpoint)
-
-        control_power = sum(float(v) ** 2 for v in u_vals)
-        error_power = sum(float(v) ** 2 for v in error_vals) if error_vals is not None else 0.0
-        self._control_energy_total += control_power
-        self._error_energy_total += error_power
-        if self.show_instantaneous_power:
-            self.control_power_buf.append(control_power)
-            self.error_power_buf.append(error_power)
-        if self.show_total_energy:
-            self.control_energy_buf.append(self._control_energy_total)
-            self.error_energy_buf.append(self._error_energy_total)
 
         now = time.monotonic()
         if now - self._last_refresh < self.refresh_interval_s:
@@ -337,32 +276,6 @@ class LiveControlPlot:
         self.ax_y.autoscale_view()
         if self.y1_buf:
             self.y_label.set_text(f"y1={self.y1_buf[-1]:.3f} | setpoint={self.setpoint_buf[-1]:.3f}")
-
-        if self.show_instantaneous_power:
-            self.control_power_line.set_data(self.t_buf, self.control_power_buf)
-            self.ax_control_power.relim()
-            self.ax_control_power.autoscale_view()
-            if self.control_power_buf:
-                self.control_power_label.set_text(f"{self.control_power_buf[-1]:.4f}")
-
-            self.error_power_line.set_data(self.t_buf, self.error_power_buf)
-            self.ax_error_power.relim()
-            self.ax_error_power.autoscale_view()
-            if self.error_power_buf:
-                self.error_power_label.set_text(f"{self.error_power_buf[-1]:.4f}")
-
-        if self.show_total_energy:
-            self.control_energy_line.set_data(self.t_buf, self.control_energy_buf)
-            self.ax_control_energy.relim()
-            self.ax_control_energy.autoscale_view()
-            if self.control_energy_buf:
-                self.control_energy_label.set_text(f"{self.control_energy_buf[-1]:.4f}")
-
-            self.error_energy_line.set_data(self.t_buf, self.error_energy_buf)
-            self.ax_error_energy.relim()
-            self.ax_error_energy.autoscale_view()
-            if self.error_energy_buf:
-                self.error_energy_label.set_text(f"{self.error_energy_buf[-1]:.4f}")
 
         self.fig.canvas.draw_idle()
         self.fig.canvas.flush_events()
