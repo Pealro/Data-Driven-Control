@@ -13,7 +13,9 @@ import numpy as np
 
 import calibration
 
-EXPERIMENTS_DIR = "experimentos"
+# ancorado na pasta do projeto (nao no CWD) -- rodar runner.py de outro
+# diretorio nao pode espalhar pastas de teste fora do projeto
+EXPERIMENTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "experimentos")
 
 
 def create_test_folder(plant_name: str, base_dir: str = EXPERIMENTS_DIR) -> tuple[str, str]:

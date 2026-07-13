@@ -163,23 +163,33 @@ def _prompt_calibration(
         " correspondente, dados ficam em unidade crua):"
     )
     print("  Entrada = leitura do sensor na porta analogica do Arduino (0-5V):")
-    y_physical_min = prompt_float_or_unknown(
-        "    Valor minimo de entrada (valor fisico quando a porta analogica le 0V)",
-        default=y_physical_min_default,
-    )
-    y_physical_max = prompt_float_or_unknown(
-        "    Valor maximo de entrada (valor fisico quando a porta analogica le 5V)",
-        default=y_physical_max_default,
-    )
+    while True:
+        y_physical_min = prompt_float_or_unknown(
+            "    Valor minimo de entrada (valor fisico quando a porta analogica le 0V)",
+            default=y_physical_min_default,
+        )
+        y_physical_max = prompt_float_or_unknown(
+            "    Valor maximo de entrada (valor fisico quando a porta analogica le 5V)",
+            default=y_physical_max_default,
+        )
+        # max > min obrigatorio quando ambos definidos -- max == min faria a
+        # conversao inversa (calibration.y_physical_to_raw) dividir por zero
+        if y_physical_min is None or y_physical_max is None or y_physical_max > y_physical_min:
+            break
+        print("    O maximo deve ser MAIOR que o minimo -- digite os dois de novo.")
     print("  Saida = comando do atuador (PWM, 0-100%):")
-    u_physical_min = prompt_float_or_unknown(
-        "    Valor minimo de saida (valor fisico quando o atuador esta em 0%)",
-        default=u_physical_min_default,
-    )
-    u_physical_max = prompt_float_or_unknown(
-        "    Valor maximo de saida (valor fisico quando o atuador esta em 100%)",
-        default=u_physical_max_default,
-    )
+    while True:
+        u_physical_min = prompt_float_or_unknown(
+            "    Valor minimo de saida (valor fisico quando o atuador esta em 0%)",
+            default=u_physical_min_default,
+        )
+        u_physical_max = prompt_float_or_unknown(
+            "    Valor maximo de saida (valor fisico quando o atuador esta em 100%)",
+            default=u_physical_max_default,
+        )
+        if u_physical_min is None or u_physical_max is None or u_physical_max > u_physical_min:
+            break
+        print("    O maximo deve ser MAIOR que o minimo -- digite os dois de novo.")
     return y_physical_min, y_physical_max, u_physical_min, u_physical_max
 
 
@@ -215,15 +225,20 @@ def flash_generic_firmware(port: str) -> bool:
             f"{port} nesta pasta: firmware/boards/generic) ou o experimento vai falhar se a"
             " placa nao tiver esse firmware."
         )
-        return not _confirm_local("Prosseguir mesmo assim?")
+        return _confirm_local("Prosseguir mesmo assim?")
 
     board_dir = os.path.join(_PROJECT_ROOT, "firmware", "boards", "generic")
     print(f"\nGravando firmware/boards/generic na porta {port} (alguns segundos)...")
-    result = subprocess.run(
-        [pio, "run", "-d", board_dir, "-t", "upload", "--upload-port", port],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [pio, "run", "-d", board_dir, "-t", "upload", "--upload-port", port],
+            capture_output=True,
+            text=True,
+            timeout=300,  # primeira execucao do pio pode baixar toolchain; alem disso e travamento
+        )
+    except subprocess.TimeoutExpired:
+        print("    ERRO: pio upload nao terminou em 300s -- verifique a placa/porta e tente de novo.")
+        return False
     if result.returncode != 0:
         print("    ERRO ao gravar o firmware generico:")
         print(result.stdout[-2000:])
@@ -316,7 +331,11 @@ CONFIG = ExperimentConfig(
 
 def _discover_configs() -> dict[str, str]:
     """Retorna {nome_da_planta: dotted_module_path} para os arquivos em
-    config/, exceto base.py e __init__.py."""
+    config/, exceto base.py e __init__.py. Configs quebradas (erro de
+    import/sem CONFIG) sao puladas com aviso em vez de derrubar o wizard --
+    importante agora que configs sao geradas automaticamente e podem ser
+    editadas a mao. Nomes duplicados ganham o nome do modulo como sufixo
+    para nao se sombrearem no menu."""
     configs = {}
     config_dir = os.path.join(_PROJECT_ROOT, "config")
     for path in sorted(glob.glob(os.path.join(config_dir, "*.py"))):
@@ -324,8 +343,15 @@ def _discover_configs() -> dict[str, str]:
         if module_name in ("base", "__init__"):
             continue
         dotted_path = f"config.{module_name}"
-        module = importlib.import_module(dotted_path)
-        configs[module.CONFIG.name] = dotted_path
+        try:
+            module = importlib.import_module(dotted_path)
+            display_name = module.CONFIG.name
+        except Exception as error:
+            print(f"    AVISO: config/{module_name}.py ignorada ({error})")
+            continue
+        if display_name in configs:
+            display_name = f"{display_name} ({module_name})"
+        configs[display_name] = dotted_path
     return configs
 
 
@@ -348,7 +374,7 @@ def run_wizard() -> WizardSession:
 
 def _prompt_free_params_override(cfg: ExperimentConfig):
     print(f"\nParametros livres (Enter mantem o valor atual da config '{cfg.name}'):")
-    dt = prompt_float("  Taxa de amostragem (dt) [s]", default=cfg.dt)
+    dt = prompt_float("  Taxa de amostragem (dt) [s]", default=cfg.dt, min_value=0.001)
     T = prompt_int("  Numero de coletas (T)", default=cfg.T, min_value=1)
     excitation_amplitude = prompt_float(
         "  Amplitude de entrada (excitation_amplitude)", default=cfg.excitation_amplitude
@@ -403,7 +429,9 @@ def _wizard_new_plant() -> WizardSession:
     print(f"\nParametros de entrada (firmware generico: ate {N_MAX} estados, ate {M_MAX} entradas):")
     n = prompt_int(f"  Numero de estados (1-{N_MAX})", min_value=1, max_value=N_MAX)
     m = prompt_int(f"  Numero de entradas (1-{M_MAX})", min_value=1, max_value=M_MAX)
-    dt = prompt_float("  Taxa de amostragem (dt) [s]", min_value=0.0)
+    # minimo 1ms: o protocolo manda dt em ms inteiros (CFG,<dt_ms>) -- dt=0
+    # viraria busy-loop no firmware, e dt<1ms trunca para 0 no int()
+    dt = prompt_float("  Taxa de amostragem (dt) [s]", min_value=0.001)
 
     T_min = (m + 1) * n + m  # condicao necessaria de persistencia de excitacao (De Persis & Tesi, 2020)
     print(f"    (minimo para persistencia de excitacao: T >= (m+1)n+m = {T_min})")

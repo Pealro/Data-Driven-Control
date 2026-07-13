@@ -21,6 +21,7 @@ CONTROL_PLOT_WINDOW_SIZE = 1000  # janela deslizante (Bloco D): mantem as ultima
 # buffers de plot)
 
 ACQUISITION_PLOT_WINDOW_SIZE = 1000  # janela deslizante (Bloco B), mesmo raciocinio
+HIST_BIN_COUNT = 20
 
 
 class LiveAcquisitionPlot:
@@ -76,6 +77,12 @@ class LiveAcquisitionPlot:
 
         self.ax_hist.set_title("Distribuicao de u coletado")
         self.ax_hist.grid(alpha=0.3)
+        # barras criadas UMA vez e so atualizadas (set_x/width/height) a cada
+        # redraw -- cla()+hist() recriaria 20 artists + titulo + grid toda vez
+        self._hist_bars = self.ax_hist.bar(
+            np.zeros(HIST_BIN_COUNT), np.zeros(HIST_BIN_COUNT), width=1.0,
+            color="tab:red", alpha=0.75, align="edge",
+        )
 
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
@@ -105,16 +112,20 @@ class LiveAcquisitionPlot:
         self.ax_y.relim()
         self.ax_y.autoscale_view()
 
-        self.ax_hist.cla()
         # np.fromiter + itertools.chain em vez de list comprehension
         # aninhada -- mais rapido para achatar m canais * ate window_size
         # amostras cada (relevante com m=4, o maximo suportado pela planta
         # generica) sem crescer o custo por causa da quantidade de canais
         all_u = np.fromiter(chain.from_iterable(self.u_buf), dtype=float)
         if all_u.size:
-            self.ax_hist.hist(all_u, bins=20, color="tab:red", alpha=0.75)
-        self.ax_hist.set_title("Distribuicao de u coletado")
-        self.ax_hist.grid(alpha=0.3)
+            counts, edges = np.histogram(all_u, bins=HIST_BIN_COUNT)
+            bar_width = edges[1] - edges[0]
+            for rect, left, height in zip(self._hist_bars, edges[:-1], counts):
+                rect.set_x(left)
+                rect.set_width(bar_width)
+                rect.set_height(height)
+            self.ax_hist.set_xlim(edges[0], edges[-1])
+            self.ax_hist.set_ylim(0, max(int(counts.max()), 1) * 1.05)
 
         remaining = max(0, self.T - self._sample_count)
         self._remaining_label.set_text(f"faltam {remaining}/{self.T} amostras")

@@ -22,8 +22,11 @@ def estimate_residual_gamma(X0: np.ndarray, X1: np.ndarray, U0: np.ndarray) -> f
     stacked_input_state = np.vstack([U0, X0])
     BA_hat = X1 @ np.linalg.pinv(stacked_input_state)
     D0_hat = X1 - BA_hat @ stacked_input_state
-    max_residual_eigenvalue = np.max(np.linalg.eigvals(D0_hat @ D0_hat.T).real)
-    min_signal_eigenvalue = np.min(np.linalg.eigvals(X1 @ X1.T).real)
+    # eigvalsh (nao eigvals): as matrizes de Gram sao simetricas PSD por
+    # construcao -- solver simetrico e mais rapido, estavel, e ja retorna
+    # autovalores reais em ordem crescente
+    max_residual_eigenvalue = np.linalg.eigvalsh(D0_hat @ D0_hat.T)[-1]
+    min_signal_eigenvalue = np.linalg.eigvalsh(X1 @ X1.T)[0]
     return float(max_residual_eigenvalue / min_signal_eigenvalue)
 
 

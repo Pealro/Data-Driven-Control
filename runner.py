@@ -56,16 +56,18 @@ def _session_from_config(dotted_path: str) -> WizardSession:
 def _setpoint_bounds(session: WizardSession, ybar_physical: np.ndarray) -> tuple[float, float]:
     """Faixa valida de setpoint (unidade fisica), usada pelos 3 modos do
     Bloco D: os limites de calibracao (entrada, ver calibration.py) se
-    definidos no Bloco A, senao ybar +- max_expected_state_deviation."""
+    definidos no Bloco A, senao a envoltoria de ybar +-
+    max_expected_state_deviation sobre TODOS os canais -- usar so o canal 1
+    daria uma faixa errada para plantas MIMO cujos equilibrios diferem."""
     setpoint_min = (
         session.y_physical_min
         if session.y_physical_min is not None
-        else float(ybar_physical[0] - session.max_expected_state_deviation)
+        else float(np.min(ybar_physical) - session.max_expected_state_deviation)
     )
     setpoint_max = (
         session.y_physical_max
         if session.y_physical_max is not None
-        else float(ybar_physical[0] + session.max_expected_state_deviation)
+        else float(np.max(ybar_physical) + session.max_expected_state_deviation)
     )
     return setpoint_min, setpoint_max
 
@@ -277,10 +279,14 @@ def main():
                 setpoint_min, setpoint_max,
                 **calibration_kwargs,
             )
-    except Exception as error:
+    except (Exception, KeyboardInterrupt) as error:
         # rede de seguranca: um erro aqui (ex.: hiccup na serial) nao deveria
         # derrubar o programa sem fechar a planta nem avisar o usuario.
-        print(f"\nAVISO: o teste de controle foi interrompido por um erro: {error}")
+        # KeyboardInterrupt PRECISA estar aqui (nao e subclasse de Exception):
+        # sem isso, Ctrl+C durante o controle mataria o programa sem mandar o
+        # comando X ao firmware -- e a planta real ficaria com os atuadores
+        # ligados, rodando a malha sozinha indefinidamente.
+        print(f"\nAVISO: o teste de controle foi interrompido: {error!r}")
         if hasattr(plant, "abort"):
             try:
                 plant.abort()

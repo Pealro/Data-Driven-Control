@@ -22,6 +22,11 @@ from terminal_input import TerminalController
 
 SAFE_MATH_NAMESPACE = {name: getattr(math, name) for name in dir(math) if not name.startswith("_")}
 SETPOINT_CHANGE_EPSILON = 1e-6
+SETPOINT_SEND_MIN_INTERVAL_S = 0.05  # modo funcao: uma f(t) continua (ex.: seno)
+# muda mais que o epsilon a CADA amostra, entao so o epsilon nao segura nada --
+# sem este intervalo minimo, cada amostra viraria um par SP/ACK,SP extra na
+# serial (dobrando o trafego com dt pequeno). 20 SPs/s e mais que suficiente
+# para o setpoint parecer continuo.
 
 
 def make_function_evaluator(expression: str, min_output: float, max_output: float):
@@ -34,9 +39,11 @@ def make_function_evaluator(expression: str, min_output: float, max_output: floa
     """
     code = compile(expression, "<setpoint_function>", "eval")
     reset_at = [0.0]
+    # namespace reusado entre chamadas (so "t" muda) -- copiar o dict de ~60
+    # funcoes do math a cada amostra seria custo desnecessario no laco quente
+    namespace = dict(SAFE_MATH_NAMESPACE)
 
     def evaluate_raw(t: float) -> float:
-        namespace = dict(SAFE_MATH_NAMESPACE)
         namespace["t"] = t
         return eval(code, {"__builtins__": {}}, namespace)
 
@@ -186,14 +193,21 @@ def run_function_mode(
     print("Rodando com setpoint(t) = f(t). Digite 'e' e Enter no terminal para encerrar.")
     plot = LiveControlPlot(plant_name, m=plant.m, setpoint_initial=float(initial_setpoint[0]))
 
-    last_sent = [None]
+    last_sent_value = [None]
+    last_sent_time = [-SETPOINT_SEND_MIN_INTERVAL_S]
 
     def on_sample(t_s, y_vals, u_vals):
         y_physical = [calibration.y_raw_to_physical(v, y_physical_min, y_physical_max) for v in y_vals]
         u_physical = [calibration.u_raw_to_physical(v, u_physical_min, u_physical_max) for v in u_vals]
         new_value_physical = evaluate(t_s)
-        if last_sent[0] is None or abs(new_value_physical - last_sent[0]) > SETPOINT_CHANGE_EPSILON:
-            last_sent[0] = new_value_physical
+        value_changed = (
+            last_sent_value[0] is None
+            or abs(new_value_physical - last_sent_value[0]) > SETPOINT_CHANGE_EPSILON
+        )
+        interval_elapsed = t_s - last_sent_time[0] >= SETPOINT_SEND_MIN_INTERVAL_S
+        if value_changed and interval_elapsed:
+            last_sent_value[0] = new_value_physical
+            last_sent_time[0] = t_s
             plot.add_sample(t_s, y_physical[0], u_physical, setpoint_val=new_value_physical)
             new_value_raw = calibration.y_physical_to_raw(
                 new_value_physical, y_physical_min, y_physical_max

@@ -5,10 +5,17 @@ DataDrivenSerialProtocol -- nao ha nada especifico de TCLab aqui.
 tclab_siso.py, tclab_mimo.py, rc_circuit.py etc. sao especializacoes finas
 desta classe: a diferenca entre elas e so n, m e os limites do atuador."""
 
+import time
+
 import numpy as np
 
 from plants.base import Plant
 from plants.serial_protocol import DataDrivenSerialProtocol, SerialLink
+
+VERBOSE_PRINT_INTERVAL_S = 0.1  # throttle dos prints de progresso: imprimir a
+# CADA amostra (ex.: 200x/s com dt=5ms) gasta tempo de console dentro do laco
+# que le a serial -- se o laco atrasar, o buffer de saida do Arduino enche e o
+# Serial.print() do firmware trava, congelando o experimento/controle real
 
 
 class SerialPlant(Plant):
@@ -29,6 +36,16 @@ class SerialPlant(Plant):
         self.link = SerialLink(port, baud, timeout_s=5.0)
         self.proto = DataDrivenSerialProtocol(self.link, n=n, m=m)
         self.verbose = verbose
+        self._last_verbose_print = 0.0
+
+    def _verbose_due(self) -> bool:
+        if not self.verbose:
+            return False
+        now = time.monotonic()
+        if now - self._last_verbose_print < VERBOSE_PRINT_INTERVAL_S:
+            return False
+        self._last_verbose_print = now
+        return True
 
     def run_experiment(
         self, T, dt, ubar, settle_duration_s, excitation_amplitude, seed, on_sample=None
@@ -52,7 +69,7 @@ class SerialPlant(Plant):
             print(f"\n    Equilibrio medido: ybar = {np.round(ybar, 3)}")
 
         def wrapped_on_sample(k, t_s, y_vals, u_vals):
-            if self.verbose:
+            if self._verbose_due():
                 print(f"    k = {k:>3}/{T} | y = {y_vals} | u = {u_vals}", end="\r")
             if on_sample:
                 on_sample(t_s, y_vals, u_vals)
@@ -70,7 +87,7 @@ class SerialPlant(Plant):
             new_setpoint = on_sample(t_s, y_vals, u_vals) if on_sample else None
             if new_setpoint is not None:
                 current_setpoint = np.asarray(new_setpoint, dtype=float)
-            if self.verbose:
+            if self._verbose_due():
                 tracking_error = np.array(y_vals) - current_setpoint
                 print(
                     f"    t = {t_s:>7.1f} s | y = {y_vals} | u = {u_vals} | "
