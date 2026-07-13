@@ -68,7 +68,12 @@ def prompt_choice(question: str, options: list[str]) -> int:
         print(f"    Digite um numero entre 1 e {len(options)}.")
 
 
-def prompt_float(question: str, default: float | None = None, min_value: float | None = None) -> float:
+def prompt_float(
+    question: str,
+    default: float | None = None,
+    min_value: float | None = None,
+    max_value: float | None = None,
+) -> float:
     suffix = f" [{default}]" if default is not None else ""
     while True:
         raw = input(f"{question}{suffix}: ").strip()
@@ -81,6 +86,9 @@ def prompt_float(question: str, default: float | None = None, min_value: float |
             continue
         if min_value is not None and value < min_value:
             print(f"    Valor deve ser >= {min_value}.")
+            continue
+        if max_value is not None and value > max_value:
+            print(f"    Valor deve ser <= {max_value}.")
             continue
         return value
 
@@ -231,6 +239,78 @@ def _confirm_local(question: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# persistencia de planta nova (Bloco A: "nova planta") como config reutilizavel
+# ---------------------------------------------------------------------------
+
+def _sanitize_module_name(name: str) -> str:
+    """Converte o nome digitado pelo usuario num nome de modulo Python
+    valido (ex.: 'Planta 2' -> 'planta_2')."""
+    safe = "".join(c.lower() if c.isalnum() else "_" for c in name.strip())
+    safe = "_".join(part for part in safe.split("_") if part)
+    if not safe or safe[0].isdigit():
+        safe = f"planta_{safe}" if safe else "planta_nova"
+    return safe
+
+
+def _save_generic_plant_config(
+    plant_name: str,
+    n: int,
+    m: int,
+    port: str,
+    T: int,
+    dt: float,
+    excitation_amplitude: float,
+    max_expected_state_deviation: float,
+    ubar: np.ndarray,
+    settle_duration_s: float,
+    rho: float,
+    seed: int | None,
+) -> str:
+    """Grava config/<nome>.py para que a planta apareca em 'Planta ja
+    estabelecida' nas proximas execucoes (usa plants.generic.GenericPlant,
+    igual ao fluxo de 'nova planta' -- so muda que n/m/porta ja vem
+    prontos, sem precisar regravar firmware)."""
+    config_dir = os.path.join(_PROJECT_ROOT, "config")
+    module_name = _sanitize_module_name(plant_name)
+    file_path = os.path.join(config_dir, f"{module_name}.py")
+    suffix = 2
+    while os.path.exists(file_path):
+        file_path = os.path.join(config_dir, f"{module_name}_{suffix}.py")
+        suffix += 1
+
+    content = f'''# -*- coding: utf-8 -*-
+"""Config gerada automaticamente pelo wizard (Bloco A: "nova planta").
+Planta generica com n={n} estado(s), m={m} entrada(s) -- firmware/boards/generic."""
+
+import numpy as np
+
+from config.base import ExperimentConfig
+from plants.generic import GenericPlant
+
+PORT = {port!r}
+BAUD = 115200
+
+CONFIG = ExperimentConfig(
+    name={plant_name!r},
+    make_plant=lambda: GenericPlant(n={n}, m={m}, port=PORT, baud=BAUD),
+    T={T!r},
+    dt={dt!r},
+    excitation_amplitude={excitation_amplitude!r},
+    max_expected_state_deviation={max_expected_state_deviation!r},
+    rho={rho!r},
+    ubar=np.array({ubar.tolist()!r}),
+    settle_duration_s={settle_duration_s!r},
+    setpoint=None,
+    control_duration_s=0.0,
+    seed={seed!r},
+)
+'''
+    with open(file_path, "w", encoding="utf-8") as config_file:
+        config_file.write(content)
+    return file_path
+
+
+# ---------------------------------------------------------------------------
 # descoberta de configs existentes (config/*.py)
 # ---------------------------------------------------------------------------
 
@@ -348,6 +428,12 @@ def _wizard_new_plant() -> WizardSession:
         f"\n    (nao pedidos no wizard, usando padrao: ubar={ubar.tolist()}, "
         f"settle_duration_s={DEFAULT_SETTLE_DURATION_S}, rho={DEFAULT_RHO}, seed={DEFAULT_SEED})"
     )
+
+    config_path = _save_generic_plant_config(
+        plant_name, n, m, port, T, dt, excitation_amplitude, max_expected_state_deviation,
+        ubar, DEFAULT_SETTLE_DURATION_S, DEFAULT_RHO, DEFAULT_SEED,
+    )
+    print(f"    Planta salva em {config_path} -- aparecera em 'Planta ja estabelecida' da proxima vez.")
 
     return WizardSession(
         plant_name=plant_name,

@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """Bloco C: organizacao dos resultados em pasta -- uma pasta por teste,
 nomeada <planta>_<timestamp>, com um CSV de aquisicao e (se chegar la) um
-CSV de controle dentro dela."""
+CSV de controle dentro dela. Todas as pastas de teste ficam dentro de
+experimentos/ (nunca versionado -- ver .gitignore) para nao poluir a raiz
+do projeto nem o repositorio remoto com dados de coleta."""
 
 import csv
 import os
@@ -11,8 +13,10 @@ import numpy as np
 
 import calibration
 
+EXPERIMENTS_DIR = "experimentos"
 
-def create_test_folder(plant_name: str, base_dir: str = ".") -> tuple[str, str]:
+
+def create_test_folder(plant_name: str, base_dir: str = EXPERIMENTS_DIR) -> tuple[str, str]:
     """Cria (se nao existir) <base_dir>/<plant_name>_<timestamp>/ e retorna
     (caminho_da_pasta, timestamp)."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

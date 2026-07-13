@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 .pio/
 .vscode/
+
+# resultados de coleta/controle (Bloco C) -- dados de experimento do
+# usuario, nao fazem parte do projeto e nao devem ir para o repositorio
+/experimentos/

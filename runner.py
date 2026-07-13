@@ -53,6 +53,23 @@ def _session_from_config(dotted_path: str) -> WizardSession:
     )
 
 
+def _setpoint_bounds(session: WizardSession, ybar_physical: np.ndarray) -> tuple[float, float]:
+    """Faixa valida de setpoint (unidade fisica), usada pelos 3 modos do
+    Bloco D: os limites de calibracao (entrada, ver calibration.py) se
+    definidos no Bloco A, senao ybar +- max_expected_state_deviation."""
+    setpoint_min = (
+        session.y_physical_min
+        if session.y_physical_min is not None
+        else float(ybar_physical[0] - session.max_expected_state_deviation)
+    )
+    setpoint_max = (
+        session.y_physical_max
+        if session.y_physical_max is not None
+        else float(ybar_physical[0] + session.max_expected_state_deviation)
+    )
+    return setpoint_min, setpoint_max
+
+
 def _confirm(question: str, default_yes: bool = False) -> bool:
     suffix = "[S/n]" if default_yes else "[s/N]"
     raw = input(f"\n{question} {suffix}: ").strip().lower()
@@ -159,7 +176,7 @@ def main():
         u_physical_min=session.u_physical_min, u_physical_max=session.u_physical_max,
     )
     acquisition_png_path = f"{folder_path}/{session.plant_name}_{timestamp}_teste_de_input.png"
-    acquisition_plot.close(keep_open=False, save_path=acquisition_png_path)
+    acquisition_plot.close(keep_open=True, save_path=acquisition_png_path)
     print(f"\n    Pasta: {folder_path}")
     print(f"    Salvos: {input_csv_path}, {acquisition_png_path}")
 
@@ -211,9 +228,16 @@ def main():
     # modos abaixo convertem para unidade crua internamente antes de mandar
     # ao firmware (K/ubar seguem sempre em unidade crua)
     ybar_physical = calibration.y_raw_to_physical(ybar, session.y_physical_min, session.y_physical_max)
+    setpoint_min, setpoint_max = _setpoint_bounds(session, ybar_physical)
+    print(f"\nFaixa valida de setpoint: [{setpoint_min}, {setpoint_max}] (definida no Bloco A).")
     initial_setpoint = np.array(
         [
-            prompt_float(f"Setpoint inicial y{i + 1}", default=float(ybar_physical[i]))
+            prompt_float(
+                f"Setpoint inicial y{i + 1}",
+                default=float(ybar_physical[i]),
+                min_value=setpoint_min,
+                max_value=setpoint_max,
+            )
             for i in range(n)
         ]
     )
@@ -236,36 +260,19 @@ def main():
         if mode == 0:
             run_terminal_setpoint_mode(
                 plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
+                setpoint_min, setpoint_max,
                 **calibration_kwargs,
             )
         elif mode == 1:
-            slider_range = (
-                session.y_physical_min
-                if session.y_physical_min is not None
-                else float(ybar_physical[0] - session.max_expected_state_deviation),
-                session.y_physical_max
-                if session.y_physical_max is not None
-                else float(ybar_physical[0] + session.max_expected_state_deviation),
-            )
             run_slider_mode(
                 plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
-                slider_range,
+                (setpoint_min, setpoint_max),
                 **calibration_kwargs,
             )
         else:
-            default_min_output = session.y_physical_min if session.y_physical_min is not None else 0.0
-            default_max_output = (
-                session.y_physical_max if session.y_physical_max is not None else float(ybar_physical[0] * 2)
-            )
-            min_output = prompt_float(
-                "Valor minimo de saida da funcao f(t)", default=default_min_output
-            )
-            max_output = prompt_float(
-                "Valor maximo de saida da funcao f(t)", default=default_max_output
-            )
             run_function_mode(
                 plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
-                min_output, max_output,
+                setpoint_min, setpoint_max,
                 **calibration_kwargs,
             )
     except Exception as error:

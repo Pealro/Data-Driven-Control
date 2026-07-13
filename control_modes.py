@@ -73,15 +73,20 @@ def _finish(
 
 def run_terminal_setpoint_mode(
     plant, K, initial_setpoint, plant_name, folder_path, timestamp,
+    setpoint_min, setpoint_max,
     y_physical_min=None, y_physical_max=None, u_physical_min=None, u_physical_max=None,
 ):
     """initial_setpoint e os valores digitados pelo usuario estao em unidade
     fisica (se calibrada); sao convertidos para unidade crua antes de
-    qualquer comunicacao com a planta/firmware."""
+    qualquer comunicacao com a planta/firmware. setpoint_min/setpoint_max
+    (unidade fisica) vem da calibracao definida no Bloco A -- valores
+    digitados fora dessa faixa sao ajustados (clamp) para o limite mais
+    proximo."""
     n = len(initial_setpoint)
     print(
         f"\nDigite {n} valor(es) de setpoint (separados por espaco) a qualquer momento e "
-        "pressione Enter para atualizar. Digite 'e' e Enter para encerrar o teste."
+        f"pressione Enter para atualizar (faixa valida: [{setpoint_min}, {setpoint_max}]). "
+        "Digite 'e' e Enter para encerrar o teste."
     )
     terminal = TerminalController(n=n, accept_setpoint_input=True)
     terminal.start()
@@ -94,10 +99,13 @@ def run_terminal_setpoint_mode(
         new_setpoint_physical = terminal.take_pending_setpoint()
         if new_setpoint_physical is None:
             return None
-        plot.add_sample(t_s, y_physical[0], u_physical, setpoint_val=new_setpoint_physical[0])
+        clamped_setpoint = [min(max(v, setpoint_min), setpoint_max) for v in new_setpoint_physical]
+        if clamped_setpoint != new_setpoint_physical:
+            print(f"    (setpoint fora da faixa [{setpoint_min}, {setpoint_max}] -- ajustado para {clamped_setpoint})")
+        plot.add_sample(t_s, y_physical[0], u_physical, setpoint_val=clamped_setpoint[0])
         return [
             calibration.y_physical_to_raw(v, y_physical_min, y_physical_max)
-            for v in new_setpoint_physical
+            for v in clamped_setpoint
         ]
 
     initial_setpoint_raw = [
@@ -156,18 +164,20 @@ def run_slider_mode(
 
 
 def run_function_mode(
-    plant, K, initial_setpoint, plant_name, folder_path, timestamp, min_output, max_output,
+    plant, K, initial_setpoint, plant_name, folder_path, timestamp, setpoint_min, setpoint_max,
     y_physical_min=None, y_physical_max=None, u_physical_min=None, u_physical_max=None,
 ):
-    """f(t), initial_setpoint, min_output e max_output estao em unidade
-    fisica (se calibrada); convertidos para unidade crua antes de falar com
-    a planta."""
+    """f(t) e initial_setpoint estao em unidade fisica (se calibrada);
+    convertidos para unidade crua antes de falar com a planta.
+    setpoint_min/setpoint_max (unidade fisica) vem da calibracao definida
+    no Bloco A -- a saida de f(t) e sempre limitada a essa faixa (ver
+    make_function_evaluator)."""
     n = len(initial_setpoint)
     expression = input(
-        f"\nDigite f(t) em segundos, saida entre {min_output} e "
-        f"{max_output} (ex.: 5*sin(2*pi*t/10)+{(min_output + max_output) / 2:.1f}): "
+        f"\nDigite f(t) em segundos, saida entre {setpoint_min} e "
+        f"{setpoint_max} (ex.: 5*sin(2*pi*t/10)+{(setpoint_min + setpoint_max) / 2:.1f}): "
     ).strip()
-    evaluate = make_function_evaluator(expression, min_output, max_output)
+    evaluate = make_function_evaluator(expression, setpoint_min, setpoint_max)
 
     terminal = TerminalController(n=n, accept_setpoint_input=False)
     terminal.start()

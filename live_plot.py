@@ -5,12 +5,18 @@ durante a coleta -- o mesmo cuidado que ja tomamos com a precisao do
 timestamp do firmware nesta sessao."""
 
 import time
+from collections import deque
 
 import matplotlib
 
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
+
+CONTROL_PLOT_WINDOW_SIZE = 1000  # janela deslizante (Bloco D): mantem as ultimas
+# 1000 amostras no grafico e desliza a partir dai -- o CSV salvo continua com
+# o historico completo (t_log/y_log/u_log vem de plant.run_control, nao destes
+# buffers de plot)
 
 
 class LiveAcquisitionPlot:
@@ -94,8 +100,15 @@ class LiveAcquisitionPlot:
 
 class LiveControlPlot:
     """2 paineis (Bloco D): entrada u(t) (todos os canais) e y1(t) em malha
-    fechada. Slider opcional (modo "scrollbar do mouse") embutido na mesma
-    figura -- arrastar o slider atualiza o setpoint em tempo real."""
+    fechada, com o setpoint plotado como serie de dados (mantendo os valores
+    anteriores em cada instante, nao so o atual -- ver add_sample). Slider
+    opcional (modo "scrollbar do mouse") embutido na mesma figura -- arrastar
+    o slider atualiza o setpoint em tempo real.
+
+    Os buffers usam uma janela deslizante de CONTROL_PLOT_WINDOW_SIZE
+    amostras: o grafico mostra so as ultimas N e vai deslizando: o CSV salvo
+    ao final do teste usa o log completo devolvido por plant.run_control,
+    nao estes buffers."""
 
     def __init__(
         self,
@@ -105,14 +118,17 @@ class LiveControlPlot:
         refresh_interval_s: float = 0.15,
         with_slider: bool = False,
         slider_range: tuple[float, float] = (0.0, 100.0),
+        window_size: int = CONTROL_PLOT_WINDOW_SIZE,
     ):
         self.m = m
         self.refresh_interval_s = refresh_interval_s
         self._last_refresh = 0.0
 
-        self.t_buf: list[float] = []
-        self.y1_buf: list[float] = []
-        self.u_buf: list[list[float]] = [[] for _ in range(m)]
+        self.t_buf: deque[float] = deque(maxlen=window_size)
+        self.y1_buf: deque[float] = deque(maxlen=window_size)
+        self.u_buf: list[deque[float]] = [deque(maxlen=window_size) for _ in range(m)]
+        self.setpoint_buf: deque[float] = deque(maxlen=window_size)
+        self._current_setpoint = setpoint_initial
 
         self._slider_dirty = False
         self._slider_value = setpoint_initial
@@ -140,8 +156,8 @@ class LiveControlPlot:
         self.ax_u.grid(alpha=0.3)
 
         (self.y1_line,) = self.ax_y.plot([], [], color="tab:blue", label="y1")
-        self.setpoint_line = self.ax_y.axhline(
-            setpoint_initial, color="k", lw=0.8, ls="--", label="setpoint"
+        (self.setpoint_line,) = self.ax_y.plot(
+            [], [], color="k", lw=0.8, ls="--", label="setpoint"
         )
         self.ax_y.set_title("Malha fechada: y1(t)")
         self.ax_y.set_xlabel("tempo [s]")
@@ -165,12 +181,17 @@ class LiveControlPlot:
         return None
 
     def add_sample(self, t_s: float, y1_val: float, u_vals, setpoint_val: float | None = None) -> None:
+        if setpoint_val is not None:
+            self._current_setpoint = setpoint_val
         self.t_buf.append(t_s)
         self.y1_buf.append(float(y1_val))
         for j in range(self.m):
             self.u_buf[j].append(float(u_vals[j]))
-        if setpoint_val is not None:
-            self.setpoint_line.set_ydata([setpoint_val, setpoint_val])
+        # sempre grava o setpoint vigente (mesmo quando nao mudou nesta
+        # amostra) -- assim a linha pontilhada vira uma serie real (funcao
+        # em degrau) que preserva os valores anteriores em cada instante,
+        # em vez de uma linha horizontal que salta inteira para o novo nivel
+        self.setpoint_buf.append(self._current_setpoint)
 
         now = time.monotonic()
         if now - self._last_refresh < self.refresh_interval_s:
@@ -185,6 +206,7 @@ class LiveControlPlot:
         self.ax_u.autoscale_view()
 
         self.y1_line.set_data(self.t_buf, self.y1_buf)
+        self.setpoint_line.set_data(self.t_buf, self.setpoint_buf)
         self.ax_y.relim()
         self.ax_y.autoscale_view()
 
