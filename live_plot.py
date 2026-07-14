@@ -6,7 +6,6 @@ timestamp do firmware nesta sessao."""
 
 import time
 from collections import deque
-from itertools import chain
 
 import matplotlib
 import numpy as np
@@ -63,7 +62,12 @@ class LiveAcquisitionPlot:
             bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
         )
 
-        self.u_lines = [self.ax_u.plot([], [], label=f"u{j + 1}")[0] for j in range(m)]
+        # cor explicita "Cj" (nao deixar no cycler implicito) -- o mesmo
+        # indice de cor e reusado no histograma abaixo, pra u_j no painel de
+        # entrada e a distribuicao de u_j ficarem visualmente pareadas
+        self.u_lines = [
+            self.ax_u.plot([], [], color=f"C{j}", label=f"u{j + 1}")[0] for j in range(m)
+        ]
         self.ax_u.set_title("Entrada u(t)")
         self.ax_u.set_xlabel("tempo [s]")
         self.ax_u.legend(loc="upper right")
@@ -75,14 +79,20 @@ class LiveAcquisitionPlot:
         self.ax_y.legend(loc="upper right")
         self.ax_y.grid(alpha=0.3)
 
-        self.ax_hist.set_title("Distribuicao de u coletado")
+        self.ax_hist.set_title("Distribuicao de u coletado (por canal)")
         self.ax_hist.grid(alpha=0.3)
-        # barras criadas UMA vez e so atualizadas (set_x/width/height) a cada
-        # redraw -- cla()+hist() recriaria 20 artists + titulo + grid toda vez
-        self._hist_bars = self.ax_hist.bar(
-            np.zeros(HIST_BIN_COUNT), np.zeros(HIST_BIN_COUNT), width=1.0,
-            color="tab:red", alpha=0.75, align="edge",
-        )
+        # um histograma POR CANAL, sobreposto com alpha (nao empilhado) --
+        # empilhar tudo num histograma so escondia diferenca entre canais.
+        # bins criados uma vez e so atualizados (set_x/width/height) a cada
+        # redraw -- cla()+hist() recriaria os artists + titulo + grid toda vez
+        self._hist_bars = [
+            self.ax_hist.bar(
+                np.zeros(HIST_BIN_COUNT), np.zeros(HIST_BIN_COUNT), width=1.0,
+                color=f"C{j}", alpha=0.5, align="edge", label=f"u{j + 1}",
+            )
+            for j in range(m)
+        ]
+        self.ax_hist.legend(loc="upper right")
 
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
@@ -112,26 +122,33 @@ class LiveAcquisitionPlot:
         self.ax_y.relim()
         self.ax_y.autoscale_view()
 
-        # np.fromiter + itertools.chain em vez de list comprehension
-        # aninhada -- mais rapido para achatar m canais * ate window_size
-        # amostras cada (relevante com m=4, o maximo suportado pela planta
-        # generica) sem crescer o custo por causa da quantidade de canais
-        all_u = np.fromiter(chain.from_iterable(self.u_buf), dtype=float)
+        # por canal (nao mais um unico histograma empilhado com todos os
+        # canais juntos -- isso escondia diferenca de distribuicao entre
+        # eles). Bins COMPARTILHADOS entre canais (calculados do range
+        # combinado) para os histogramas ficarem comparaveis lado a lado.
+        # np.fromiter em vez de list comprehension -- mais rapido pra ate
+        # window_size amostras por canal (relevante com m=4).
+        per_channel_u = [np.fromiter(channel, dtype=float) for channel in self.u_buf]
+        per_channel_u = [values[~np.isnan(values)] for values in per_channel_u]
         # a ULTIMA amostra do experimento sempre traz u=nan,...,nan (o
         # firmware nao aplica entrada nesse passo final -- ver
         # plants/serial_protocol.py, "u=nan,..,nan no ultimo k"). Um unico
-        # NaN em all_u faz min/max virar NaN e o np.histogram quebrar
-        # (autodetected range [nan, nan]) -- descarta antes de binar.
-        all_u = all_u[~np.isnan(all_u)]
+        # NaN faria min/max virar NaN e o np.histogram quebrar (autodetected
+        # range [nan, nan]) -- por isso descarta ANTES de calcular o range.
+        all_u = np.concatenate(per_channel_u) if per_channel_u else np.array([])
         if all_u.size:
-            counts, edges = np.histogram(all_u, bins=HIST_BIN_COUNT)
+            edges = np.histogram_bin_edges(all_u, bins=HIST_BIN_COUNT)
             bar_width = edges[1] - edges[0]
-            for rect, left, height in zip(self._hist_bars, edges[:-1], counts):
-                rect.set_x(left)
-                rect.set_width(bar_width)
-                rect.set_height(height)
+            max_count = 1
+            for bars, values in zip(self._hist_bars, per_channel_u):
+                counts, _ = np.histogram(values, bins=edges)
+                max_count = max(max_count, int(counts.max(initial=0)))
+                for rect, left, height in zip(bars, edges[:-1], counts):
+                    rect.set_x(left)
+                    rect.set_width(bar_width)
+                    rect.set_height(height)
             self.ax_hist.set_xlim(edges[0], edges[-1])
-            self.ax_hist.set_ylim(0, max(int(counts.max()), 1) * 1.05)
+            self.ax_hist.set_ylim(0, max_count * 1.05)
 
         remaining = max(0, self.T - self._sample_count)
         self._remaining_label.set_text(f"faltam {remaining}/{self.T} amostras")
@@ -148,20 +165,22 @@ class LiveAcquisitionPlot:
 
 
 class LiveControlPlot:
-    """2 paineis (Bloco D): entrada u(t) (todos os canais) e y1(t) em malha
-    fechada, com o setpoint plotado como serie de dados (mantem os valores
-    anteriores em cada instante, nao so o atual -- ver add_sample). Slider
-    opcional (modo "scrollbar do mouse") embutido na mesma figura -- arrastar
-    o slider atualiza o setpoint em tempo real. Cada painel tem uma label no
-    canto mostrando o valor atual.
+    """2 paineis (Bloco D): entrada u(t) (todos os canais) e y(t) em malha
+    fechada -- TODOS os n canais medidos, cada um com seu proprio setpoint
+    plotado como serie de dados na mesma cor (linha solida = y_i, linha
+    pontilhada = setpoint_i), mantendo os valores anteriores em cada
+    instante, nao so o atual (ver add_sample). Slider opcional (modo
+    "scrollbar do mouse") embutido na mesma figura -- arrastar o slider
+    atualiza o setpoint em tempo real. Cada painel tem uma label no canto
+    mostrando o valor atual de cada canal.
 
-    Numero de paineis fica FIXO em 2 (ou 3 com slider) independente de m
-    (numero de entradas) -- so a quantidade de LINHAS dentro do painel de u
-    cresce com m, o que e barato (set_data). O custo caro de redraw()
-    (relayout do matplotlib) escala com o numero de PAINEIS, nao de canais
-    -- por isso nao ha aqui paineis extras opcionais que multiplicariam
-    esse custo (ver historico: uma versao anterior tinha ate 6 paineis e
-    isso chegou a travar o laco de controle real, nao so o grafico).
+    Numero de paineis fica FIXO em 2 (ou 3 com slider) independente de m/n --
+    so a quantidade de LINHAS dentro de cada painel cresce, o que e barato
+    (set_data). O custo caro de redraw() (relayout do matplotlib) escala com
+    o numero de PAINEIS, nao de canais -- por isso nao ha aqui paineis
+    extras que multiplicariam esse custo (ver historico: uma versao anterior
+    tinha ate 6 paineis e isso chegou a travar o laco de controle real, nao
+    so o grafico).
 
     Os buffers usam uma janela deslizante de CONTROL_PLOT_WINDOW_SIZE
     amostras: o grafico mostra so as ultimas N e vai deslizando: o CSV salvo
@@ -171,8 +190,9 @@ class LiveControlPlot:
     def __init__(
         self,
         plant_name: str,
+        n: int,
         m: int,
-        setpoint_initial: float,
+        setpoint_initial,
         # throttle frouxo (nao a cada amostra) para nao competir com o laco
         # de leitura da serial -- se redraw() atrasar a leitura, o buffer de
         # saida do Arduino enche e o Serial.print() do firmware trava
@@ -184,18 +204,21 @@ class LiveControlPlot:
         slider_range: tuple[float, float] = (0.0, 100.0),
         window_size: int = CONTROL_PLOT_WINDOW_SIZE,
     ):
+        self.n = n
         self.m = m
         self.refresh_interval_s = refresh_interval_s
         self._last_refresh = 0.0
 
+        setpoint_initial = [float(v) for v in np.atleast_1d(setpoint_initial)]
+
         self.t_buf: deque[float] = deque(maxlen=window_size)
-        self.y1_buf: deque[float] = deque(maxlen=window_size)
+        self.y_buf: list[deque[float]] = [deque(maxlen=window_size) for _ in range(n)]
         self.u_buf: list[deque[float]] = [deque(maxlen=window_size) for _ in range(m)]
-        self.setpoint_buf: deque[float] = deque(maxlen=window_size)
-        self._current_setpoint = setpoint_initial
+        self.setpoint_buf: list[deque[float]] = [deque(maxlen=window_size) for _ in range(n)]
+        self._current_setpoint = list(setpoint_initial)
 
         self._slider_dirty = False
-        self._slider_value = setpoint_initial
+        self._slider_value = setpoint_initial[0]
 
         plt.ion()
         if with_slider:
@@ -205,7 +228,7 @@ class LiveControlPlot:
             )
             self.slider = Slider(
                 self.ax_slider, "Setpoint", slider_range[0], slider_range[1],
-                valinit=setpoint_initial,
+                valinit=setpoint_initial[0],
             )
             self.slider.on_changed(self._on_slider_changed)
         else:
@@ -223,13 +246,19 @@ class LiveControlPlot:
         self.ax_u.grid(alpha=0.3)
         self.u_label = self._make_value_label(self.ax_u)
 
-        (self.y1_line,) = self.ax_y.plot([], [], color="tab:blue", label="y1")
-        (self.setpoint_line,) = self.ax_y.plot(
-            [], [], color="k", lw=0.8, ls="--", label="setpoint"
-        )
-        self.ax_y.set_title("Malha fechada: y1(t)")
+        # y_i solido e seu setpoint_i pontilhado compartilham a mesma cor
+        # (ciclo padrao "C0","C1",...) para ficar claro qual par e qual,
+        # mesmo com n=4 (8 linhas no mesmo painel)
+        self.y_lines = [
+            self.ax_y.plot([], [], color=f"C{i}", label=f"y{i + 1}")[0] for i in range(n)
+        ]
+        self.setpoint_lines = [
+            self.ax_y.plot([], [], color=f"C{i}", lw=0.8, ls="--", label=f"sp{i + 1}")[0]
+            for i in range(n)
+        ]
+        self.ax_y.set_title("Malha fechada: y(t)")
         self.ax_y.set_xlabel("tempo [s]")
-        self.ax_y.legend(loc="upper right")
+        self.ax_y.legend(loc="upper right", ncol=2, fontsize=8)
         self.ax_y.grid(alpha=0.3)
         self.y_label = self._make_value_label(self.ax_y)
 
@@ -258,18 +287,23 @@ class LiveControlPlot:
             return self._slider_value
         return None
 
-    def add_sample(self, t_s: float, y1_val: float, u_vals, setpoint_val: float | None = None) -> None:
+    def add_sample(self, t_s: float, y_vals, u_vals, setpoint_val=None) -> None:
+        """y_vals: vetor com os n canais medidos. setpoint_val, se
+        fornecido, e o vetor de n setpoints vigente a partir desta amostra
+        (None mantem o setpoint anterior em todos os canais)."""
         if setpoint_val is not None:
-            self._current_setpoint = setpoint_val
+            self._current_setpoint = [float(v) for v in setpoint_val]
         self.t_buf.append(t_s)
-        self.y1_buf.append(float(y1_val))
+        for i in range(self.n):
+            self.y_buf[i].append(float(y_vals[i]))
+            # sempre grava o setpoint vigente (mesmo quando nao mudou nesta
+            # amostra) -- assim a linha pontilhada vira uma serie real
+            # (funcao em degrau) que preserva os valores anteriores em cada
+            # instante, em vez de uma linha horizontal que salta inteira
+            # para o novo nivel
+            self.setpoint_buf[i].append(self._current_setpoint[i])
         for j in range(self.m):
             self.u_buf[j].append(float(u_vals[j]))
-        # sempre grava o setpoint vigente (mesmo quando nao mudou nesta
-        # amostra) -- assim a linha pontilhada vira uma serie real (funcao
-        # em degrau) que preserva os valores anteriores em cada instante,
-        # em vez de uma linha horizontal que salta inteira para o novo nivel
-        self.setpoint_buf.append(self._current_setpoint)
 
         now = time.monotonic()
         if now - self._last_refresh < self.refresh_interval_s:
@@ -287,12 +321,18 @@ class LiveControlPlot:
                 ", ".join(f"u{j + 1}={self.u_buf[j][-1]:.3f}" for j in range(self.m))
             )
 
-        self.y1_line.set_data(self.t_buf, self.y1_buf)
-        self.setpoint_line.set_data(self.t_buf, self.setpoint_buf)
+        for i in range(self.n):
+            self.y_lines[i].set_data(self.t_buf, self.y_buf[i])
+            self.setpoint_lines[i].set_data(self.t_buf, self.setpoint_buf[i])
         self.ax_y.relim()
         self.ax_y.autoscale_view()
-        if self.y1_buf:
-            self.y_label.set_text(f"y1={self.y1_buf[-1]:.3f} | setpoint={self.setpoint_buf[-1]:.3f}")
+        if self.y_buf and self.y_buf[0]:
+            self.y_label.set_text(
+                "\n".join(
+                    f"y{i + 1}={self.y_buf[i][-1]:.3f} | sp{i + 1}={self.setpoint_buf[i][-1]:.3f}"
+                    for i in range(self.n)
+                )
+            )
 
         self.fig.canvas.draw_idle()
         self.fig.canvas.flush_events()

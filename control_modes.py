@@ -97,7 +97,7 @@ def run_terminal_setpoint_mode(
     )
     terminal = TerminalController(n=n, accept_setpoint_input=True)
     terminal.start()
-    plot = LiveControlPlot(plant_name, m=plant.m, setpoint_initial=float(initial_setpoint[0]))
+    plot = LiveControlPlot(plant_name, n=n, m=plant.m, setpoint_initial=initial_setpoint)
 
     def on_sample(t_s, y_vals, u_vals):
         y_physical = [calibration.y_raw_to_physical(v, y_physical_min, y_physical_max) for v in y_vals]
@@ -109,12 +109,12 @@ def run_terminal_setpoint_mode(
             clamped_setpoint = [min(max(v, setpoint_min), setpoint_max) for v in new_setpoint_physical]
             if clamped_setpoint != new_setpoint_physical:
                 print(f"    (setpoint fora da faixa [{setpoint_min}, {setpoint_max}] -- ajustado para {clamped_setpoint})")
-            setpoint_val_for_plot = clamped_setpoint[0]
+            setpoint_val_for_plot = clamped_setpoint
             raw_setpoint_to_send = [
                 calibration.y_physical_to_raw(v, y_physical_min, y_physical_max)
                 for v in clamped_setpoint
             ]
-        plot.add_sample(t_s, y_physical[0], u_physical, setpoint_val=setpoint_val_for_plot)
+        plot.add_sample(t_s, y_physical, u_physical, setpoint_val=setpoint_val_for_plot)
         return raw_setpoint_to_send
 
     initial_setpoint_raw = [
@@ -141,8 +141,9 @@ def run_slider_mode(
     print("\nArraste o slider para mudar o setpoint. Digite 'e' e Enter no terminal para encerrar.")
     plot = LiveControlPlot(
         plant_name,
+        n=n,
         m=plant.m,
-        setpoint_initial=float(initial_setpoint[0]),
+        setpoint_initial=initial_setpoint,
         with_slider=True,
         slider_range=slider_range,
     )
@@ -152,12 +153,12 @@ def run_slider_mode(
         u_physical = [calibration.u_raw_to_physical(v, u_physical_min, u_physical_max) for v in u_vals]
         new_value_physical = plot.take_slider_change()
         if new_value_physical is not None:
-            plot.add_sample(t_s, y_physical[0], u_physical, setpoint_val=new_value_physical)
+            plot.add_sample(t_s, y_physical, u_physical, setpoint_val=[new_value_physical] * n)
             new_value_raw = calibration.y_physical_to_raw(
                 new_value_physical, y_physical_min, y_physical_max
             )
             return [new_value_raw] * n
-        plot.add_sample(t_s, y_physical[0], u_physical)
+        plot.add_sample(t_s, y_physical, u_physical)
         return None
 
     initial_setpoint_raw = [
@@ -191,7 +192,7 @@ def run_function_mode(
     terminal = TerminalController(n=n, accept_setpoint_input=False)
     terminal.start()
     print("Rodando com setpoint(t) = f(t). Digite 'e' e Enter no terminal para encerrar.")
-    plot = LiveControlPlot(plant_name, m=plant.m, setpoint_initial=float(initial_setpoint[0]))
+    plot = LiveControlPlot(plant_name, n=n, m=plant.m, setpoint_initial=initial_setpoint)
 
     last_sent_value = [None]
     last_sent_time = [-SETPOINT_SEND_MIN_INTERVAL_S]
@@ -208,12 +209,12 @@ def run_function_mode(
         if value_changed and interval_elapsed:
             last_sent_value[0] = new_value_physical
             last_sent_time[0] = t_s
-            plot.add_sample(t_s, y_physical[0], u_physical, setpoint_val=new_value_physical)
+            plot.add_sample(t_s, y_physical, u_physical, setpoint_val=[new_value_physical] * n)
             new_value_raw = calibration.y_physical_to_raw(
                 new_value_physical, y_physical_min, y_physical_max
             )
             return [new_value_raw] * n
-        plot.add_sample(t_s, y_physical[0], u_physical)
+        plot.add_sample(t_s, y_physical, u_physical)
         return None
 
     initial_setpoint_raw = [
