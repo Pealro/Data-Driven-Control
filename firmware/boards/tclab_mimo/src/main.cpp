@@ -4,10 +4,9 @@
  *  Controle data-driven (De Persis & Tesi, TAC 2020, Teorema 6) no TCLab
  *  Planta MIMO: Q1,Q2 (aquecedores) -> T1,T2 (sensores). N=2, M=2.
  *
- *  ATENCAO: pinout padrao do TCLab (Q1=pino 3, Q2=pino 5, T1=A0, T2=A1),
- *  mas esta placa NAO FOI VALIDADA em hardware real neste projeto -- so o
- *  sketch SISO (firmware/boards/tclab_siso) foi testado ate agora. Confira
- *  calibracao (TMP36 x AREF) e T_SAFE antes de rodar experimentos.
+ *  Pinout OFICIAL do TCLab: Q1=pino 3, Q2=pino 5, T1=A0, T2=A2 (o TCLab pula
+ *  o A1). Confira calibracao (TMP36 x AREF) e T_SAFE antes de rodar
+ *  experimentos. Alvo: Arduino Leonardo (grave com -e leonardo).
  * ===========================================================================
  */
 
@@ -21,7 +20,7 @@ const int PIN_Q1 = 3;
 const int PIN_Q2 = 5;
 const int PIN_LED = 9;
 const int PIN_T1 = A0;
-const int PIN_T2 = A1;
+const int PIN_T2 = A2;  // TCLab: T2 esta no A2 (nao A1 -- o shield pula o A1)
 
 #define USE_EXTERNAL_AREF 1
 #if USE_EXTERNAL_AREF
