@@ -31,6 +31,11 @@ DEFAULT_SETTLE_DURATION_S = 2.0
 
 _PROJECT_ROOT = os.path.dirname(__file__)
 
+# metodos de controle oferecidos apos escolher a planta (ver runner.py)
+CONTROL_DEPERSIS = "depersis"   # De Persis & Tesi (data-driven linear) -- metodo original
+CONTROL_DELAY = "delay"         # delay-embedding (estado aumentado, mesma LMI)
+CONTROL_KOOPMAN = "koopman"     # Koopman bilinear + controlador racional (so m=1)
+
 
 @dataclass
 class WizardSession:
@@ -44,12 +49,42 @@ class WizardSession:
     max_expected_state_deviation: float
     rho: float
     seed: int | None
+    # metodo de controle e profundidade do embutimento (delay-embedding)
+    control_method: str = CONTROL_DEPERSIS
+    embedding_L: int = 1
     # calibracao fisica opcional (ver calibration.py) -- None = sem
     # conversao, dados ficam em unidade crua (volts / % de duty)
     y_physical_min: float | None = None  # valor fisico quando o ADC le 0V
     y_physical_max: float | None = None  # valor fisico quando o ADC le 5V
     u_physical_min: float | None = None  # valor fisico quando o atuador esta em 0%
     u_physical_max: float | None = None  # valor fisico quando o atuador esta em 100%
+
+
+def choose_control_method(plant) -> tuple[str, int]:
+    """Menu de metodo de controle (apos escolher a planta). Retorna
+    (metodo, L). Koopman so aparece para plantas de 1 entrada (m=1) -- o artigo
+    e escalar-input. Delay-embedding pergunta a profundidade L."""
+    opcoes = [
+        ("Controle orientado a dados (De Persis & Tesi)", CONTROL_DEPERSIS),
+        ("Delay-embedding (estado aumentado, mesma LMI)", CONTROL_DELAY),
+    ]
+    if getattr(plant, "m", 1) == 1:
+        opcoes.append(("Controle com modelo de Koopman", CONTROL_KOOPMAN))
+    else:
+        print(
+            f"\n(Koopman indisponivel: requer 1 entrada de controle, esta planta tem m={plant.m}.)"
+        )
+    idx = prompt_choice("Metodo de controle:", [rotulo for rotulo, _ in opcoes])
+    metodo = opcoes[idx][1]
+
+    L = 1
+    if metodo == CONTROL_DELAY:
+        print(
+            "\n  Delay-embedding empilha L amostras de y e u no estado. L=1 = metodo"
+            " original; use L>1 se a planta tiver ordem maior que o nº de sensores."
+        )
+        L = prompt_int("  Profundidade do embutimento L", default=1, min_value=1)
+    return metodo, L
 
 
 # ---------------------------------------------------------------------------

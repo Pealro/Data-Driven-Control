@@ -19,9 +19,24 @@ import calibration
 import wizard
 from control_modes import run_function_mode, run_slider_mode, run_terminal_setpoint_mode
 from datadriven import assembly, diagnostics, lmi
-from live_plot import LiveAcquisitionPlot
-from output_io import create_test_folder, save_gain_csv, save_input_test_csv
-from wizard import WizardSession, prompt_choice, prompt_float
+from datadriven.embedded_control import DelayEmbeddedController
+from live_plot import LiveAcquisitionPlot, LiveControlPlot
+from output_io import (
+    create_test_folder,
+    save_control_test_csv,
+    save_gain_csv,
+    save_input_test_csv,
+    save_koopman_controller,
+)
+from terminal_input import TerminalController
+from wizard import (
+    CONTROL_DELAY,
+    CONTROL_DEPERSIS,
+    CONTROL_KOOPMAN,
+    WizardSession,
+    prompt_choice,
+    prompt_float,
+)
 
 
 def parse_args():
@@ -33,6 +48,16 @@ def parse_args():
         default=None,
         help="pula o assistente interativo (Bloco A) e usa esta config existente "
         "diretamente (ex.: config.rc_circuit)",
+    )
+    parser.add_argument(
+        "--method",
+        default=None,
+        choices=[CONTROL_DEPERSIS, CONTROL_DELAY, CONTROL_KOOPMAN],
+        help="metodo de controle (pula o menu interativo). koopman requer m=1.",
+    )
+    parser.add_argument(
+        "--embedding-L", type=int, default=1,
+        help="profundidade L do delay-embedding (so com --method delay)",
     )
     return parser.parse_args()
 
@@ -80,11 +105,211 @@ def _confirm(question: str, default_yes: bool = False) -> bool:
     return raw in ("s", "sim", "y", "yes")
 
 
+def _run_regulation_control(plant, compute_u, session, folder_path, timestamp, n, ybar):
+    """Bloco D dos metodos que REGULAM ao equilibrio (delay-embedding e Koopman):
+    aplica u=compute_u(y) em malha fechada via run_control_external, plota y(t)/
+    u(t) com o equilibrio ybar como referencia, 'e'+Enter encerra. Salva CSV/PNG."""
+    if hasattr(plant, "real_time"):
+        plant.real_time = True
+    ybar_physical = calibration.y_raw_to_physical(
+        ybar, session.y_physical_min, session.y_physical_max
+    )
+    terminal = TerminalController(n=n, accept_setpoint_input=False)
+    terminal.start()
+    print("\nRegulacao ao equilibrio em malha fechada. Digite 'e' e Enter para encerrar.")
+    plot = LiveControlPlot(
+        session.plant_name, n=n, m=plant.m, setpoint_initial=list(np.atleast_1d(ybar_physical)),
+    )
+
+    def on_sample(t_s, y_vals, u_vals):
+        y_physical = [
+            calibration.y_raw_to_physical(v, session.y_physical_min, session.y_physical_max)
+            for v in y_vals
+        ]
+        u_physical = [
+            calibration.u_raw_to_physical(v, session.u_physical_min, session.u_physical_max)
+            for v in u_vals
+        ]
+        plot.add_sample(t_s, y_physical, u_physical, setpoint_val=list(np.atleast_1d(ybar_physical)))
+
+    t_log, y_log, u_log = plant.run_control_external(
+        compute_u, duration_s=0, on_sample=on_sample, should_abort=terminal.should_abort
+    )
+    png_path = f"{folder_path}/{session.plant_name}_{timestamp}_teste_de_controle.png"
+    plot.close(keep_open=True, save_path=png_path)
+    if len(t_log) > 0:
+        y_phys = calibration.y_raw_to_physical(y_log, session.y_physical_min, session.y_physical_max)
+        u_phys = calibration.u_raw_to_physical(u_log, session.u_physical_min, session.u_physical_max)
+        csv_path = save_control_test_csv(
+            folder_path, session.plant_name, timestamp, t_log, y_phys, u_phys
+        )
+        print(f"\nSalvos: {csv_path}, {png_path}")
+
+
+def _run_koopman(session, plant, y_raw, u_raw, folder_path, timestamp, ybar, n):
+    """Bloco C/D do metodo Koopman: lifting Phi -> EDMD bilinear -> LMI robusta
+    (busca em grade) -> controlador racional -> regulacao ao equilibrio."""
+    from koopman.controller import KoopmanRationalController
+    from koopman.edmd import bilinear_edmd
+    from koopman.lifting import monomial_exponents, phi
+    from koopman.lmi import make_solver
+    from koopman.search import design_controller
+
+    solver = make_solver()
+    print(f"\n[3] Koopman: lifting Phi (monomios grau 5) + EDMD bilinear + LMI ({solver})...")
+    exponents = monomial_exponents(n, grau_maximo=5)
+    X0, X1 = y_raw[:, :-1], y_raw[:, 1:]
+    Z0, Z1 = phi(X0, exponents), phi(X1, exponents)
+    edmd = bilinear_edmd(Z0, Z1, u_raw)
+    print(f"    N_phi = {Z0.shape[0]} | EDMD erro_rel = {edmd['erro_rel']:.2e} | cond(Y) = {edmd['cond_Y']:.2e}")
+
+    x0_control = getattr(plant, "x0_control", plant.x.copy() if hasattr(plant, "x") else np.zeros(n))
+    n_steps_teste = int(round(5.0 / session.dt))
+
+    def simulate_fn(K, Kw):
+        ctrl = KoopmanRationalController(K, Kw, exponents)
+        sim = plant.rollout(ctrl.compute_u, x0_control, n_steps_teste, session.dt)
+        X = sim["X"]
+        finit = np.all(np.isfinite(X), axis=1)
+        nf = np.inf if not np.any(finit) else float(np.linalg.norm(X[np.where(finit)[0][-1]]))
+        score = 1e12 if (sim["explodiu"] or not np.isfinite(nf)) else nf
+        return score, {"explodiu": sim["explodiu"]}
+
+    print("    Buscando controlador (grade Rz/eps, simula-e-escolhe)...")
+    melhor, candidatos = design_controller(edmd["A"], edmd["B0"], edmd["B1"], simulate_fn, solver=solver)
+    K, Kw = melhor["res"]["K"], melhor["res"]["Kw"]
+    print(f"    Melhor: Rz={melhor['res']['Rz']:.1e} score={melhor['score']:.3e} cond(P)={melhor['res']['condP']:.2e}")
+    npz_path = save_koopman_controller(folder_path, session.plant_name, timestamp, K, Kw, exponents)
+    print(f"    Salvo: {npz_path}")
+
+    controller = KoopmanRationalController(K, Kw, exponents)
+    _run_regulation_control(plant, controller.compute_u, session, folder_path, timestamp, n, ybar)
+
+
+def _solve_linear_and_verify(X0, X1, U0, session, folder_path, timestamp, n_eff, m):
+    """LMI de De Persis & Tesi (compartilhada por depersis e delay-embedding):
+    diagnosticos + confirmacao + solve_gain + salva K + verifica estabilidade.
+    Retorna o result da LMI, ou None se o usuario abortar."""
+    rank, is_pe = diagnostics.check_persistency_of_excitation(U0, X0, n_eff, m)
+    gamma_hat = diagnostics.estimate_residual_gamma(X0, X1, U0)
+    print(f"    rank([U0; X0]) = {rank}  (necessario n_eff+m = {n_eff + m})")
+    print(f"    gamma estimado (proxy Assumption 5) ~ {gamma_hat:.2e}")
+    if not is_pe:
+        print("\nAVISO: dados NAO persistentemente excitantes (rank insuficiente).")
+
+    if not _confirm("Prosseguir com o calculo da LMI?"):
+        print("\nEncerrado a pedido do usuario (LMI nao calculada).")
+        return None
+
+    print(f"\n[3] Resolvendo a LMI data-driven (rho = {session.rho})...")
+    try:
+        result = lmi.solve_gain(X0, X1, U0, session.rho)
+    except lmi.LMIInfeasibleError as error:
+        sys.exit(str(error))
+    print(f"    LMI solve status: {result.status}")
+    print(f"    Ganho K (shape {result.K.shape}) =\n{result.K}")
+    gain_csv_path = save_gain_csv(folder_path, session.plant_name, timestamp, result.K)
+    print(f"    Salvo: {gain_csv_path}")
+
+    eigs, stable, within_margin = lmi.verify_stability(X1, result.G_K, session.rho)
+    print(
+        f"\n[4] |autoval.| (dados): {np.round(np.abs(eigs), 4)} | "
+        f"estavel: {stable} | dentro da margem rho: {within_margin}"
+    )
+    if not stable:
+        sys.exit("Verificacao data-driven falhou: malha fechada instavel.")
+    return result
+
+
+def _run_depersis_control(plant, result, X1, ybar, session, folder_path, timestamp, n, m):
+    """Bloco D do metodo De Persis & Tesi: tracking de setpoint via os 3 modos
+    interativos (terminal, slider, funcao) -- fluxo original, intacto."""
+    while True:
+        choice = prompt_choice(
+            "O que deseja fazer?", ["Mostrar autovetores", "Prosseguir com testes de controle"]
+        )
+        if choice == 1:
+            break
+        eigenvalues, eigenvectors = lmi.closed_loop_eigen(X1, result.G_K)
+        print(f"\nAutovalores:\n{eigenvalues}")
+        print(f"Autovetores (colunas):\n{eigenvectors}")
+
+    if hasattr(plant, "real_time"):
+        plant.real_time = True
+
+    ybar_physical = calibration.y_raw_to_physical(
+        ybar, session.y_physical_min, session.y_physical_max
+    )
+    setpoint_min, setpoint_max = _setpoint_bounds(session, ybar_physical)
+    print(f"\nFaixa valida de setpoint: [{setpoint_min}, {setpoint_max}] (definida no Bloco A).")
+    initial_setpoint = np.array(
+        [
+            prompt_float(
+                f"Setpoint inicial y{i + 1}",
+                default=float(ybar_physical[i]),
+                min_value=setpoint_min,
+                max_value=setpoint_max,
+            )
+            for i in range(n)
+        ]
+    )
+    calibration_kwargs = dict(
+        y_physical_min=session.y_physical_min,
+        y_physical_max=session.y_physical_max,
+        u_physical_min=session.u_physical_min,
+        u_physical_max=session.u_physical_max,
+    )
+    mode = prompt_choice(
+        "Modo de teste de controle:",
+        [
+            "Setpoint via terminal (digite novos valores durante o teste)",
+            "Scrollbar do mouse",
+            "Funcao de entrada f(t)",
+        ],
+    )
+    try:
+        if mode == 0:
+            run_terminal_setpoint_mode(
+                plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
+                setpoint_min, setpoint_max, **calibration_kwargs,
+            )
+        elif mode == 1:
+            run_slider_mode(
+                plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
+                (setpoint_min, setpoint_max), **calibration_kwargs,
+            )
+        else:
+            run_function_mode(
+                plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
+                setpoint_min, setpoint_max, **calibration_kwargs,
+            )
+    except (Exception, KeyboardInterrupt) as error:
+        # Ctrl+C PRECISA estar aqui (nao e subclasse de Exception): sem isso,
+        # interromper o controle mataria o programa sem mandar X ao firmware e
+        # a planta real ficaria com os atuadores ligados.
+        print(f"\nAVISO: o teste de controle foi interrompido: {error!r}")
+        if hasattr(plant, "abort"):
+            try:
+                plant.abort()
+            except Exception:
+                pass
+
+
 def main():
     args = parse_args()
     session = _session_from_config(args.config) if args.config else wizard.run_wizard()
     plant = session.plant
     n, m = plant.n, plant.m
+
+    # metodo de controle: --method sobrepoe; senao pergunta (a nao ser que o
+    # wizard interativo ja tenha definido). Koopman exige m=1.
+    if args.method is not None:
+        session.control_method = args.method
+        session.embedding_L = args.embedding_L
+    elif session.control_method == CONTROL_DEPERSIS and session.embedding_L == 1:
+        session.control_method, session.embedding_L = wizard.choose_control_method(plant)
+    if session.control_method == CONTROL_KOOPMAN and m != 1:
+        sys.exit("Controle de Koopman requer 1 entrada (m=1); esta planta tem m=%d." % m)
 
     print("\n" + "=" * 70)
     print(f" Controle data-driven -- planta: {session.plant_name}")
@@ -150,27 +375,7 @@ def main():
             " (correto), mas considere reduzir excitation_amplitude."
         )
 
-    # ------------------------------------------------------------ Bloco C --
-    X0, X1, U0 = assembly.build_X0_X1_U0(y_raw, u_raw, ybar, session.ubar)
-
-    max_state_deviation, exceeded_expected_deviation = diagnostics.check_excursion(
-        X0, X1, session.max_expected_state_deviation
-    )
-    rank, is_persistently_exciting = diagnostics.check_persistency_of_excitation(U0, X0, n, m)
-    gamma_hat = diagnostics.estimate_residual_gamma(X0, X1, U0)
-
-    print(
-        f"\n[2] Excursao maxima do estado: |dx|_max = {max_state_deviation:.3f} "
-        f"(limite max_expected_state_deviation = {session.max_expected_state_deviation})"
-    )
-    if exceeded_expected_deviation:
-        print(
-            "    AVISO: excursao acima de max_expected_state_deviation -- os dados podem"
-            " violar a hipotese de resto pequeno (Assumption 5)."
-        )
-    print(f"    rank([U0; X0]) = {rank}  (necessario n+m = {n + m})")
-    print(f"    gamma estimado (proxy Assumption 5) ~ {gamma_hat:.2e}")
-
+    # ---- pos-coleta compartilhado: pasta + CSV/PNG de aquisicao ----
     folder_path, timestamp = create_test_folder(session.plant_name)
     input_csv_path = save_input_test_csv(
         folder_path, session.plant_name, timestamp, t_raw, y_raw, u_raw, ybar, session.ubar,
@@ -182,116 +387,40 @@ def main():
     print(f"\n    Pasta: {folder_path}")
     print(f"    Salvos: {input_csv_path}, {acquisition_png_path}")
 
-    if not is_persistently_exciting:
-        print("\nAVISO: dados NAO persistentemente excitantes (rank insuficiente).")
+    # ------------------------------------------------ Bloco C/D: ramifica --
+    if session.control_method == CONTROL_KOOPMAN:
+        _run_koopman(session, plant, y_raw, u_raw, folder_path, timestamp, ybar, n)
+    else:
+        L = session.embedding_L if session.control_method == CONTROL_DELAY else 1
+        X0, X1, U0 = assembly.build_X0_X1_U0(y_raw, u_raw, ybar, session.ubar, L=L)
+        n_eff = X0.shape[0]
 
-    if not _confirm("Prosseguir com o calculo da LMI?"):
-        plant.close()
-        print("\nEncerrado a pedido do usuario (LMI nao calculada).")
-        return
-
-    print(f"\n[3] Resolvendo a LMI data-driven (rho = {session.rho})...")
-    try:
-        result = lmi.solve_gain(X0, X1, U0, session.rho)
-    except lmi.LMIInfeasibleError as error:
-        plant.close()
-        sys.exit(str(error))
-    print(f"    LMI solve status: {result.status}")
-    print(f"    Ganho data-driven K =\n{result.K}")
-    gain_csv_path = save_gain_csv(folder_path, session.plant_name, timestamp, result.K)
-    print(f"    Salvo: {gain_csv_path}")
-
-    closed_loop_eigenvalues, stable, within_stability_margin = lmi.verify_stability(
-        X1, result.G_K, session.rho
-    )
-    print(
-        f"\n[4] |autoval.| (dados): {np.round(np.abs(closed_loop_eigenvalues), 4)} | "
-        f"estavel: {stable} | dentro da margem rho: {within_stability_margin}"
-    )
-    if not stable:
-        plant.close()
-        sys.exit("Verificacao data-driven falhou: malha fechada instavel.")
-
-    while True:
-        choice = prompt_choice(
-            "O que deseja fazer?", ["Mostrar autovetores", "Prosseguir com testes de controle"]
+        max_dev, exceeded = diagnostics.check_excursion(X0, X1, session.max_expected_state_deviation)
+        print(
+            f"\n[2] Excursao maxima do estado: |dx|_max = {max_dev:.3f} "
+            f"(limite = {session.max_expected_state_deviation})"
+            + (f" | L={L}, n_eff={n_eff}" if L > 1 else "")
         )
-        if choice == 1:
-            break
-        eigenvalues, eigenvectors = lmi.closed_loop_eigen(X1, result.G_K)
-        print(f"\nAutovalores:\n{eigenvalues}")
-        print(f"Autovetores (colunas):\n{eigenvectors}")
+        if exceeded:
+            print(
+                "    AVISO: excursao acima de max_expected_state_deviation -- os dados podem"
+                " violar a hipotese de resto pequeno (Assumption 5)."
+            )
 
-    # ------------------------------------------------------------ Bloco D --
-    if hasattr(plant, "real_time"):
-        plant.real_time = True  # planta simulada: espaca os passos por dt para
-        # dar tempo real de o usuario interagir (terminal/slider) -- irrelevante
-        # para plantas seriais, que ja sao pautadas pelo relogio do Arduino.
+        result = _solve_linear_and_verify(X0, X1, U0, session, folder_path, timestamp, n_eff, m)
+        if result is None:
+            plant.close()
+            return
 
-    # setpoint em unidade fisica (se calibrado -- ver calibration.py); os 3
-    # modos abaixo convertem para unidade crua internamente antes de mandar
-    # ao firmware (K/ubar seguem sempre em unidade crua)
-    ybar_physical = calibration.y_raw_to_physical(ybar, session.y_physical_min, session.y_physical_max)
-    setpoint_min, setpoint_max = _setpoint_bounds(session, ybar_physical)
-    print(f"\nFaixa valida de setpoint: [{setpoint_min}, {setpoint_max}] (definida no Bloco A).")
-    initial_setpoint = np.array(
-        [
-            prompt_float(
-                f"Setpoint inicial y{i + 1}",
-                default=float(ybar_physical[i]),
-                min_value=setpoint_min,
-                max_value=setpoint_max,
+        if session.control_method == CONTROL_DELAY:
+            controller = DelayEmbeddedController(result.K, ybar, session.ubar, L)
+            _run_regulation_control(
+                plant, controller.compute_u, session, folder_path, timestamp, n, ybar
             )
-            for i in range(n)
-        ]
-    )
-    calibration_kwargs = dict(
-        y_physical_min=session.y_physical_min,
-        y_physical_max=session.y_physical_max,
-        u_physical_min=session.u_physical_min,
-        u_physical_max=session.u_physical_max,
-    )
-
-    mode = prompt_choice(
-        "Modo de teste de controle:",
-        [
-            "Setpoint via terminal (digite novos valores durante o teste)",
-            "Scrollbar do mouse",
-            "Funcao de entrada f(t)",
-        ],
-    )
-    try:
-        if mode == 0:
-            run_terminal_setpoint_mode(
-                plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
-                setpoint_min, setpoint_max,
-                **calibration_kwargs,
+        else:  # CONTROL_DEPERSIS
+            _run_depersis_control(
+                plant, result, X1, ybar, session, folder_path, timestamp, n, m
             )
-        elif mode == 1:
-            run_slider_mode(
-                plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
-                (setpoint_min, setpoint_max),
-                **calibration_kwargs,
-            )
-        else:
-            run_function_mode(
-                plant, result.K, initial_setpoint, session.plant_name, folder_path, timestamp,
-                setpoint_min, setpoint_max,
-                **calibration_kwargs,
-            )
-    except (Exception, KeyboardInterrupt) as error:
-        # rede de seguranca: um erro aqui (ex.: hiccup na serial) nao deveria
-        # derrubar o programa sem fechar a planta nem avisar o usuario.
-        # KeyboardInterrupt PRECISA estar aqui (nao e subclasse de Exception):
-        # sem isso, Ctrl+C durante o controle mataria o programa sem mandar o
-        # comando X ao firmware -- e a planta real ficaria com os atuadores
-        # ligados, rodando a malha sozinha indefinidamente.
-        print(f"\nAVISO: o teste de controle foi interrompido: {error!r}")
-        if hasattr(plant, "abort"):
-            try:
-                plant.abort()
-            except Exception:
-                pass
 
     plant.close()
     print("\nTeste concluido.")

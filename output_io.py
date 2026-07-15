@@ -107,6 +107,21 @@ def save_gain_csv(folder_path: str, plant_name: str, timestamp: str, K: np.ndarr
     return csv_path
 
 
+def save_koopman_controller(
+    folder_path: str, plant_name: str, timestamp: str, K, Kw, exponents,
+) -> str:
+    """Salva o controlador racional de Koopman (K, Kw e os expoentes do lifting
+    Phi) num .npz na pasta do teste, para recarregar sem refazer EDMD/LMI."""
+    npz_path = os.path.join(folder_path, f"{plant_name}_{timestamp}_koopman.npz")
+    np.savez(
+        npz_path,
+        K=np.asarray(K, dtype=float),
+        Kw=np.asarray(Kw, dtype=float),
+        exponents=np.asarray(exponents, dtype=int),
+    )
+    return npz_path
+
+
 def save_control_test_csv(
     folder_path: str,
     plant_name: str,
