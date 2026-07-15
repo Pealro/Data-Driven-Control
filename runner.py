@@ -154,6 +154,7 @@ def _run_koopman(session, plant, y_raw, u_raw, folder_path, timestamp, ybar, n):
     from koopman.lifting import monomial_exponents, phi
     from koopman.lmi import make_solver
     from koopman.search import design_controller
+    from koopman.simulate import model_rollout
 
     solver = make_solver()
     print(f"\n[3] Koopman: lifting Phi (monomios grau 5) + EDMD bilinear + LMI ({solver})...")
@@ -163,12 +164,27 @@ def _run_koopman(session, plant, y_raw, u_raw, folder_path, timestamp, ybar, n):
     edmd = bilinear_edmd(Z0, Z1, u_raw)
     print(f"    N_phi = {Z0.shape[0]} | EDMD erro_rel = {edmd['erro_rel']:.2e} | cond(Y) = {edmd['cond_Y']:.2e}")
 
-    x0_control = getattr(plant, "x0_control", plant.x.copy() if hasattr(plant, "x") else np.zeros(n))
+    # x0 para a simulacao de selecao: o VdP tem um x0_control conhecido; num
+    # hardware, parte-se do desvio maximo visto nos dados (excursao coletada)
+    if hasattr(plant, "x0_control"):
+        x0_control = plant.x0_control
+    else:
+        x0_control = X0[:, int(np.argmax(np.linalg.norm(X0, axis=0)))]
     n_steps_teste = int(round(5.0 / session.dt))
+    # planta simulada: roda a dinamica REAL (reproduz o notebook). Hardware: nao
+    # da p/ simular 30 candidatos na placa -> seleciona no modelo bilinear
+    # identificado (koopman/simulate.model_rollout).
+    usa_rollout_real = hasattr(plant, "rollout")
+    if not usa_rollout_real:
+        print("    (planta sem simulacao propria -> selecao no modelo bilinear identificado)")
 
     def simulate_fn(K, Kw):
         ctrl = KoopmanRationalController(K, Kw, exponents)
-        sim = plant.rollout(ctrl.compute_u, x0_control, n_steps_teste, session.dt)
+        if usa_rollout_real:
+            sim = plant.rollout(ctrl.compute_u, x0_control, n_steps_teste, session.dt)
+        else:
+            sim = model_rollout(edmd["A"], edmd["B0"], edmd["B1"], ctrl.compute_u,
+                                exponents, x0_control, n, n_steps_teste)
         X = sim["X"]
         finit = np.all(np.isfinite(X), axis=1)
         nf = np.inf if not np.any(finit) else float(np.linalg.norm(X[np.where(finit)[0][-1]]))

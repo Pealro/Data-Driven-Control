@@ -203,6 +203,77 @@ class DataDrivenSerialProtocol:
         u_log_matrix = np.array(u_log).T if u_log else np.zeros((m, 0))
         return t_log, y_log_matrix, u_log_matrix
 
+    def send_external_control_and_stream(
+        self,
+        dt_s: float,
+        duration_s: float,
+        compute_u,
+        on_sample=None,
+        should_abort=None,
+    ) -> tuple[list[float], np.ndarray, np.ndarray]:
+        """Controle pautado pelo PC (firmware em EXTCONTROL): a cada passo o
+        Arduino manda EC,<t_ms>,<y..>,<u_aplicado_anterior..>, o PC calcula
+        u = compute_u(y) e responde URAW,<u..>. A lei (Koopman racional /
+        delay-embedding) vive no compute_u, no PC.
+
+        compute_u(y_vals) -> u (lista/array de m valores ou escalar). Levantar
+        excecao dentro de compute_u (ex.: denominador racional singular) aborta
+        o controle com seguranca (manda X). Retorna (t_log, y_log(n,N),
+        u_log(m,N)) -- y_log[k] alinhado com o u aplicado que aparece no EC
+        seguinte, mesma convencao de save_control_test_csv."""
+        n, m = self.n, self.m
+        self.link.send(f"XCTRL,{int(dt_s * 1000)},{int(duration_s)}")
+        self.link.wait_for("ACK,XCTRL", timeout_s=5)
+
+        t_log: list[float] = []
+        y_log: list[list[float]] = []
+        u_log: list[list[float]] = []
+        while True:
+            line = self.link.read_line()
+            if line == "":
+                if should_abort and should_abort():
+                    self._abort_and_wait_end()
+                    break
+                continue
+            if line.startswith("EC,"):
+                parts = line.split(",")
+                t_s = float(parts[1]) / 1000.0
+                y_vals = [float(v) for v in parts[2:2 + n]]
+                u_applied_prev = [float(v) for v in parts[2 + n:2 + n + m]]
+                # loga (t, y(k), u_aplicado(k-1)) -- o EC carrega o u do passo
+                # anterior ja saturado, alinhando y com o u que o produziu
+                if t_log:  # o primeiro EC traz u_aplicado_prev = ubar (nao e um passo de controle)
+                    u_log[-1] = u_applied_prev
+                try:
+                    u = compute_u(y_vals)
+                except Exception:
+                    self._abort_and_wait_end()
+                    raise
+                u_vec = np.atleast_1d(np.asarray(u, dtype=float)).reshape(m)
+                self.link.send(f"URAW,{fmt_vec(u_vec, 4)}")
+                t_log.append(t_s)
+                y_log.append(y_vals)
+                u_log.append([0.0] * m)  # placeholder; preenchido pelo proximo EC
+                if on_sample:
+                    on_sample(t_s, y_vals, u_vec.tolist())
+                if should_abort and should_abort():
+                    self._abort_and_wait_end()
+                    break
+            elif line.startswith("END"):
+                break
+            elif line.startswith("ACK,"):
+                continue
+            elif line.startswith("ERR"):
+                raise RuntimeError(f"Arduino reportou erro: {line}")
+
+        # descarta o ultimo passo (u ainda nao confirmado pelo EC seguinte) p/
+        # manter t/y/u do mesmo comprimento e todos com u aplicado real
+        if t_log:
+            t_log, y_log, u_log = t_log[:-1], y_log[:-1], u_log[:-1]
+        y_log_matrix = np.array(y_log).T if y_log else np.zeros((n, 0))
+        u_log_matrix = np.array(u_log).T if u_log else np.zeros((m, 0))
+        return t_log, y_log_matrix, u_log_matrix
+
     def _abort_and_wait_end(self) -> None:
         """Manda X e tenta confirmar o END do Arduino, mas NUNCA propaga
         excecao daqui: o pedido de abortar do usuario tem que ser respeitado

@@ -37,6 +37,7 @@ class SerialPlant(Plant):
         self.proto = DataDrivenSerialProtocol(self.link, n=n, m=m)
         self.verbose = verbose
         self._last_verbose_print = 0.0
+        self._dt = None  # taxa da coleta, reusada no controle pautado pelo PC
 
     def _verbose_due(self) -> bool:
         if not self.verbose:
@@ -50,6 +51,7 @@ class SerialPlant(Plant):
     def run_experiment(
         self, T, dt, ubar, settle_duration_s, excitation_amplitude, seed, on_sample=None
     ):
+        self._dt = dt  # guardado para o controle pautado pelo PC (run_control_external)
         self.proto.send_config(T, dt, ubar, settle_duration_s, excitation_amplitude, seed)
 
         if self.verbose:
@@ -105,6 +107,30 @@ class SerialPlant(Plant):
         )
         if self.verbose:
             print("\n    Controle encerrado pelo Arduino.")
+        return t_log, y_log, u_log
+
+    def run_control_external(self, compute_u, duration_s, on_sample=None, should_abort=None):
+        """Controle pautado pelo PC (firmware em EXTCONTROL): a lei u=compute_u(y)
+        roda no PC (Koopman racional / delay-embedding). Mesma assinatura das
+        plantas simuladas, para o runner tratar todas igual. Usa o dt da coleta
+        (run_experiment) como taxa alvo -- o firmware pauta por millis() e, se o
+        round-trip serial for maior que dt, o dt efetivo vira o do round-trip
+        (o EC carrega o t_ms real, entao o log reflete o timing verdadeiro)."""
+        if self._dt is None:
+            raise RuntimeError("run_experiment() deve ser chamado antes de run_control_external().")
+
+        def wrapped_on_sample(t_s, y_vals, u_vals):
+            if self._verbose_due():
+                print(f"    t = {t_s:>7.2f} s | y = {y_vals} | u = {u_vals}", end="\r")
+            if on_sample:
+                on_sample(t_s, y_vals, u_vals)
+
+        t_log, y_log, u_log = self.proto.send_external_control_and_stream(
+            self._dt, duration_s, compute_u,
+            on_sample=wrapped_on_sample, should_abort=should_abort,
+        )
+        if self.verbose:
+            print("\n    Controle (pautado pelo PC) encerrado.")
         return t_log, y_log, u_log
 
     def abort(self):

@@ -44,9 +44,18 @@
  *     SP,<setpoint_1..setpoint_n>                          atualiza o setpoint em tempo real
  *                                                           (so valido durante CONTROL, nao
  *                                                           reinicia o timing nem o ganho K)
+ *     XCTRL,<dt_ms>,<control_duration_s>                   controle pautado pelo PC (a lei
+ *                                                           roda no PC -- Koopman/delay-embedding);
+ *                                                           aceito em WAITK, paralelo ao K
+ *     URAW,<u_1..u_m>                                      comando cru a aplicar agora (resposta
+ *                                                           ao EC; so valido durante EXTCONTROL)
  *     X                                                    aborta a qualquer momento
  *   Arduino -> PC:
- *     ACK,CFG | ACK,GO | ACK,K | ACK,SP
+ *     ACK,CFG | ACK,GO | ACK,K | ACK,SP | ACK,XCTRL
+ *     EC,<t_ms>,<y_1..y_n>,<u_aplicado_anterior_1..m>      medida do controle pautado pelo PC
+ *                                                           (lock-step: firmware espera um URAW
+ *                                                           antes da proxima medida). Watchdog:
+ *                                                           ERR,EXT_TIMEOUT se o PC sumir.
  *     S,<t_s>,<y_1..y_n>            streaming do assentamento (1 Hz)
  *     EQ,<ybar_1..ybar_n>           equilibrio medido
  *     D,<k>,<t_ms>,<y_1..y_n>,<u_1..u_m>   amostra do experimento (t_ms =
@@ -117,11 +126,21 @@ public:
       tickExperiment(now);
     } else if (state_ == CONTROL) {
       tickControl(now);
+    } else if (state_ == EXTCONTROL) {
+      tickExtControl(now);
     }
   }
 
 private:
-  enum State { IDLE, READY, SETTLE, EXPERIMENT, WAITK, CONTROL };
+  // EXTCONTROL: controle pautado pelo PC (lei calculada no PC -- ex.: Koopman
+  // racional ou delay-embedding, que nao cabem no ATmega). Lock-step: manda
+  // EC,<t>,<y..>,<u_aplicado_anterior..>, espera URAW,<u..>, aplica, pauta o
+  // proximo tick por millis(). Ver tickExtControl / handleLine (XCTRL, URAW).
+  enum State { IDLE, READY, SETTLE, EXPERIMENT, WAITK, CONTROL, EXTCONTROL };
+
+  // se o PC parar de mandar URAW por mais que isto, desliga tudo (rede de
+  // seguranca do controle pautado pelo PC -- ex.: PC travou/desconectou)
+  static const unsigned long EXT_WATCHDOG_MS = 3000UL;
 
   PlantIO io_;
   State state_ = IDLE;
@@ -139,6 +158,11 @@ private:
   float K_[M][N] = {{0}};
   float setpoint_[N] = {0};
   unsigned long control_duration_ms_ = 0;
+
+  // estado do EXTCONTROL
+  bool ext_awaiting_u_ = false;          // ja mandou EC, esperando URAW do PC
+  unsigned long ext_last_c_ms_ = 0;      // quando mandou o ultimo EC (watchdog)
+  float u_applied_prev_[M] = {0};        // ultimo u realmente aplicado (p/ log alinhado)
 
   unsigned long phase_start_ms_ = 0, next_tick_ms_ = 0, last_settle_message_ms_ = 0;
   unsigned long experiment_start_ms_ = 0;  // inicio do EXPERIMENT, para D,<k>,<t_ms>,...
@@ -229,6 +253,35 @@ private:
     if (strcmp(token, "SP") == 0 && state_ == CONTROL) {
       for (int i = 0; i < active_n_; i++) setpoint_[i] = atof(strtok(nullptr, ","));
       Serial.println(F("ACK,SP"));
+      return;
+    }
+
+    // XCTRL,<dt_ms>,<control_duration_s> -- entra no controle pautado pelo PC.
+    // Aceito em WAITK (fim da coleta), paralelo ao K: reusa active_n_/active_m_/
+    // ubar_ ja definidos pelo CFG. Segura ubar ate o 1o URAW chegar.
+    if (strcmp(token, "XCTRL") == 0 && state_ == WAITK) {
+      dt_ms_ = (unsigned long)atol(strtok(nullptr, ","));
+      control_duration_ms_ = (unsigned long)atol(strtok(nullptr, ",")) * 1000UL;
+      float u_tmp[M] = {0};
+      io_.setActuators(ubar_, u_tmp, active_m_);
+      for (int i = 0; i < active_m_; i++) u_applied_prev_[i] = u_tmp[i];
+      phase_start_ms_ = millis();
+      next_tick_ms_ = phase_start_ms_;
+      ext_awaiting_u_ = false;
+      state_ = EXTCONTROL;
+      Serial.println(F("ACK,XCTRL"));
+      return;
+    }
+
+    // URAW,<u_1..u_m> -- o PC manda o comando cru a aplicar agora (resposta ao
+    // EC anterior). So valido enquanto o firmware espera (ext_awaiting_u_).
+    if (strcmp(token, "URAW") == 0 && state_ == EXTCONTROL && ext_awaiting_u_) {
+      float u_desired[M] = {0}, u_applied[M] = {0};
+      for (int i = 0; i < active_m_; i++) u_desired[i] = atof(strtok(nullptr, ","));
+      io_.setActuators(u_desired, u_applied, active_m_);
+      for (int i = 0; i < active_m_; i++) u_applied_prev_[i] = u_applied[i];
+      ext_awaiting_u_ = false;
+      next_tick_ms_ += dt_ms_;  // proxima medida dt depois do EC que originou este URAW
       return;
     }
   }
@@ -355,5 +408,49 @@ private:
       state_ = IDLE;
       Serial.println(F("END"));
     }
+  }
+
+  // Controle pautado pelo PC (lock-step nao-bloqueante). Fluxo por passo:
+  //   firmware -> EC,<t_ms>,<y..>,<u_aplicado_anterior..>   (medida)
+  //   PC       -> URAW,<u..>                                (comando cru)
+  //   firmware aplica u, pauta a proxima medida dt depois (ver handleLine URAW)
+  // A lei de controle vive no PC (Koopman racional / delay-embedding) -- o
+  // firmware so mede, aplica e mede. Watchdog desliga tudo se o PC sumir.
+  void tickExtControl(unsigned long now) {
+    if (ext_awaiting_u_) {
+      if ((now - ext_last_c_ms_) > EXT_WATCHDOG_MS) {
+        io_.allOff();
+        Serial.println(F("ERR,EXT_TIMEOUT"));
+        state_ = IDLE;
+      }
+      return;  // ja mandou EC, esperando o URAW do PC
+    }
+    if ((long)(now - next_tick_ms_) < 0) return;
+
+    float y[N];
+    io_.readSensors(y, active_n_);
+    if (safetyStop(y)) return;
+
+    unsigned long elapsed_ms = now - phase_start_ms_;
+    if (control_duration_ms_ > 0 && elapsed_ms >= control_duration_ms_) {
+      io_.allOff();
+      state_ = IDLE;
+      Serial.println(F("END"));
+      return;
+    }
+
+    Serial.print(F("EC,"));
+    Serial.print(elapsed_ms);
+    for (int i = 0; i < active_n_; i++) {
+      Serial.print(F(","));
+      Serial.print(y[i], 3);
+    }
+    for (int i = 0; i < active_m_; i++) {
+      Serial.print(F(","));
+      Serial.print(u_applied_prev_[i], 3);
+    }
+    Serial.println();
+    ext_awaiting_u_ = true;
+    ext_last_c_ms_ = now;
   }
 };
