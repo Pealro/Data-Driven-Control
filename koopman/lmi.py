@@ -11,6 +11,8 @@ SCS raramente convergem, mas ficam como fallback com aviso)."""
 import cvxpy as cp
 import numpy as np
 
+from datadriven.solver_util import solve_lmi
+
 
 def make_solver(preferencia=("MOSEK", "CLARABEL", "SCS")) -> str:
     disponiveis = cp.installed_solvers()
@@ -33,13 +35,13 @@ def _cond_posdef(M) -> float:
 def solve_koopman_lmi(
     A, B0, B1, Rz,
     eps_P=1e-9, eps_Lambda=1e-9, eps_nu=1e-9, eps_F=1e-9,
-    solver=None, verbose=False,
+    solver=None, verbose=False, log_path=None,
 ) -> dict:
     """Resolve a LMI nominal (m=1) com Qz=-I, Sz=0, Rz escalar, cx=cu=0.
-    Retorna dict com sucesso, K (1,N), Kw (1,N), P, Pinv, lambda, nu e diagnostico."""
-    if solver is None:
-        solver = make_solver()
+    Retorna dict com sucesso, K (1,N), Kw (1,N), P, Pinv, lambda, nu e diagnostico.
 
+    O solver segue o padrao do projeto (MOSEK verbose -> SCS, ver abaixo); os
+    parametros solver/verbose sao aceitos por compatibilidade mas ignorados."""
     A = np.asarray(A, dtype=float)
     B0 = np.asarray(B0, dtype=float).reshape(A.shape[0], 1)
     B1 = np.asarray(B1, dtype=float)
@@ -82,8 +84,11 @@ def solve_koopman_lmi(
     constraints.append(FI << 0)
 
     problem = cp.Problem(cp.Maximize(cp.trace(P)), constraints)
+    # padrao do projeto: MOSEK (verbose->log_path) primeiro, CLARABEL de fallback
+    # (nao SCS -- ver datadriven/solver_util.py). O try externo mantem o retorno
+    # sucesso=False se AMBOS falharem, para a busca em grade continuar.
     try:
-        problem.solve(solver=solver, verbose=verbose)
+        solve_lmi(problem, log_path=log_path)
     except Exception as erro:
         return {"sucesso": False, "status": "erro_solver", "erro": str(erro), "Rz": float(Rz)}
     if problem.status not in ("optimal", "optimal_inaccurate"):

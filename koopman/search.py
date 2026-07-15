@@ -23,7 +23,7 @@ GRID_EPS_PADRAO = [
 
 def design_controller(
     A, B0, B1, simulate_fn,
-    grid_Rz=GRID_RZ_PADRAO, grid_eps=GRID_EPS_PADRAO, solver=None, verbose=True,
+    grid_Rz=GRID_RZ_PADRAO, grid_eps=GRID_EPS_PADRAO, solver=None, verbose=True, log_path=None,
 ):
     """Varre (Rz, eps), resolve a LMI, simula com simulate_fn(K, Kw) e escolhe o
     de menor norma final do estado.
@@ -37,7 +37,7 @@ def design_controller(
     candidatos = []
     for eps_cfg in grid_eps:
         for Rz in grid_Rz:
-            res = solve_koopman_lmi(A, B0, B1, Rz, solver=solver, **eps_cfg)
+            res = solve_koopman_lmi(A, B0, B1, Rz, solver=solver, log_path=log_path, **eps_cfg)
             if not res["sucesso"]:
                 continue
             score, info = simulate_fn(res["K"], res["Kw"])

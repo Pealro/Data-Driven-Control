@@ -191,8 +191,11 @@ def _run_koopman(session, plant, y_raw, u_raw, folder_path, timestamp, ybar, n):
         score = 1e12 if (sim["explodiu"] or not np.isfinite(nf)) else nf
         return score, {"explodiu": sim["explodiu"]}
 
-    print("    Buscando controlador (grade Rz/eps, simula-e-escolhe)...")
-    melhor, candidatos = design_controller(edmd["A"], edmd["B0"], edmd["B1"], simulate_fn, solver=solver)
+    solver_log = f"{folder_path}/{session.plant_name}_{timestamp}_solver.log"
+    print(f"    Buscando controlador (grade Rz/eps, simula-e-escolhe; log do solver em {solver_log})...")
+    melhor, candidatos = design_controller(
+        edmd["A"], edmd["B0"], edmd["B1"], simulate_fn, solver=solver, log_path=solver_log
+    )
     K, Kw = melhor["res"]["K"], melhor["res"]["Kw"]
     print(f"    Melhor: Rz={melhor['res']['Rz']:.1e} score={melhor['score']:.3e} cond(P)={melhor['res']['condP']:.2e}")
     npz_path = save_koopman_controller(folder_path, session.plant_name, timestamp, K, Kw, exponents)
@@ -217,9 +220,10 @@ def _solve_linear_and_verify(X0, X1, U0, session, folder_path, timestamp, n_eff,
         print("\nEncerrado a pedido do usuario (LMI nao calculada).")
         return None
 
-    print(f"\n[3] Resolvendo a LMI data-driven (rho = {session.rho})...")
+    solver_log = f"{folder_path}/{session.plant_name}_{timestamp}_solver.log"
+    print(f"\n[3] Resolvendo a LMI data-driven (rho = {session.rho}; log do solver em {solver_log})...")
     try:
-        result = lmi.solve_gain(X0, X1, U0, session.rho)
+        result = lmi.solve_gain(X0, X1, U0, session.rho, log_path=solver_log)
     except lmi.LMIInfeasibleError as error:
         sys.exit(str(error))
     print(f"    LMI solve status: {result.status}")

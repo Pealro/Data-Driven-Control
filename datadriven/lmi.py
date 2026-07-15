@@ -18,6 +18,8 @@ from dataclasses import dataclass
 import cvxpy as cp
 import numpy as np
 
+from datadriven.solver_util import solve_lmi
+
 
 class LMIInfeasibleError(RuntimeError):
     pass
@@ -30,7 +32,7 @@ class GainResult:
     status: str
 
 
-def solve_gain(X0: np.ndarray, X1: np.ndarray, U0: np.ndarray, rho: float) -> GainResult:
+def solve_gain(X0: np.ndarray, X1: np.ndarray, U0: np.ndarray, rho: float, log_path=None) -> GainResult:
     n, T = X0.shape
     Q = cp.Variable((T, n))
     X0_Q = X0 @ Q
@@ -43,10 +45,9 @@ def solve_gain(X0: np.ndarray, X1: np.ndarray, U0: np.ndarray, rho: float) -> Ga
         X0_Q >> 1e-6 * np.eye(n),
     ]
     problem = cp.Problem(cp.Minimize(0), constraints)
-    try:
-        problem.solve(solver=cp.CLARABEL)
-    except Exception:
-        problem.solve(solver=cp.SCS)
+    # padrao do projeto: MOSEK (verbose->log_path) primeiro, CLARABEL de fallback
+    # (nao SCS -- ver datadriven/solver_util.py)
+    solve_lmi(problem, log_path=log_path)
 
     if problem.status not in ("optimal", "optimal_inaccurate"):
         raise LMIInfeasibleError(

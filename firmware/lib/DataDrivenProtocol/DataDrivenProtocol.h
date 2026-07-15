@@ -101,6 +101,12 @@ public:
 
   void begin(unsigned long baud) {
     Serial.begin(baud);
+    // Leonardo (ATmega32u4, USB nativo): espera a porta USB conectar antes de
+    // anunciar READY, senao a mensagem se perde. No Uno, Serial e sempre "true"
+    // (chip USB-serial separado), entao sai na hora. Timeout de 5s para nao
+    // travar se ninguem conectar.
+    unsigned long start = millis();
+    while (!Serial && (millis() - start) < 5000UL) {}
     Serial.println(F("TCLAB-DD,READY"));
   }
 

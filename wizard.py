@@ -36,6 +36,9 @@ CONTROL_DEPERSIS = "depersis"   # De Persis & Tesi (data-driven linear) -- metod
 CONTROL_DELAY = "delay"         # delay-embedding (estado aumentado, mesma LMI)
 CONTROL_KOOPMAN = "koopman"     # Koopman bilinear + controlador racional (so m=1)
 
+# placas suportadas (env do platformio) -- a ordem casa com o menu em _wizard_new_plant
+BOARDS = ["uno", "leonardo"]
+
 
 @dataclass
 class WizardSession:
@@ -246,27 +249,31 @@ def _find_pio_executable() -> str | None:
     return None
 
 
-def flash_generic_firmware(port: str) -> bool:
+def flash_generic_firmware(port: str, board: str = "uno") -> bool:
     """Compila e grava firmware/boards/generic na porta escolhida. Sempre
     grava de novo (idempotente, ~5-10s) -- evita o usuario ter que lembrar
     se ja gravou antes, e e a causa mais comum de a placa recusar um CFG
-    com n/m maior que o firmware atualmente gravado suporta (ERR,NM_INVALIDO)."""
+    com n/m maior que o firmware atualmente gravado suporta (ERR,NM_INVALIDO).
+
+    board = env do platformio ('uno' ou 'leonardo'). Sempre passamos -e <board>
+    porque o platformio.ini tem os dois envs; sem -e o pio tentaria gravar os
+    dois (falha)."""
     pio = _find_pio_executable()
     if pio is None:
         print(
             "\nAVISO: PlatformIO (pio) nao encontrado neste computador -- nao consigo gravar"
             " firmware/boards/generic automaticamente. Grave manualmente antes de continuar"
-            " (pio run -t upload --upload-port "
+            f" (pio run -e {board} -t upload --upload-port "
             f"{port} nesta pasta: firmware/boards/generic) ou o experimento vai falhar se a"
             " placa nao tiver esse firmware."
         )
         return _confirm_local("Prosseguir mesmo assim?")
 
     board_dir = os.path.join(_PROJECT_ROOT, "firmware", "boards", "generic")
-    print(f"\nGravando firmware/boards/generic na porta {port} (alguns segundos)...")
+    print(f"\nGravando firmware/boards/generic ({board}) na porta {port} (alguns segundos)...")
     try:
         result = subprocess.run(
-            [pio, "run", "-d", board_dir, "-t", "upload", "--upload-port", port],
+            [pio, "run", "-e", board, "-d", board_dir, "-t", "upload", "--upload-port", port],
             capture_output=True,
             text=True,
             timeout=300,  # primeira execucao do pio pode baixar toolchain; alem disso e travamento
@@ -315,6 +322,7 @@ def _save_generic_plant_config(
     settle_duration_s: float,
     rho: float,
     seed: int | None,
+    board: str = "uno",
 ) -> str:
     """Grava config/<nome>.py para que a planta apareca em 'Planta ja
     estabelecida' nas proximas execucoes (usa plants.generic.GenericPlant,
@@ -330,7 +338,8 @@ def _save_generic_plant_config(
 
     content = f'''# -*- coding: utf-8 -*-
 """Config gerada automaticamente pelo wizard (Bloco A: "nova planta").
-Planta generica com n={n} estado(s), m={m} entrada(s) -- firmware/boards/generic."""
+Planta generica com n={n} estado(s), m={m} entrada(s) -- firmware/boards/generic.
+Placa gravada: {board} (regrave com: pio run -e {board} -t upload -d firmware/boards/generic)."""
 
 import numpy as np
 
@@ -339,6 +348,7 @@ from plants.generic import GenericPlant
 
 PORT = {port!r}
 BAUD = 115200
+BOARD = {board!r}  # env do platformio usado ao gravar esta planta
 
 CONFIG = ExperimentConfig(
     name={plant_name!r},
@@ -479,8 +489,9 @@ def _wizard_new_plant() -> WizardSession:
 
     y_physical_min, y_physical_max, u_physical_min, u_physical_max = _prompt_calibration()
 
+    board = BOARDS[prompt_choice("Placa (para gravar o firmware):", ["Arduino UNO", "Arduino Leonardo"])]
     port = choose_com_port()
-    if not flash_generic_firmware(port):
+    if not flash_generic_firmware(port, board=board):
         raise RuntimeError(
             "Firmware generico nao gravado -- corrija e tente novamente antes de conectar."
         )
@@ -494,7 +505,7 @@ def _wizard_new_plant() -> WizardSession:
 
     config_path = _save_generic_plant_config(
         plant_name, n, m, port, T, dt, excitation_amplitude, max_expected_state_deviation,
-        ubar, DEFAULT_SETTLE_DURATION_S, DEFAULT_RHO, DEFAULT_SEED,
+        ubar, DEFAULT_SETTLE_DURATION_S, DEFAULT_RHO, DEFAULT_SEED, board=board,
     )
     print(f"    Planta salva em {config_path} -- aparecera em 'Planta ja estabelecida' da proxima vez.")
 
