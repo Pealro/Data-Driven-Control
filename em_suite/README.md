@@ -58,7 +58,8 @@ python em_suite/cases/case01_cavity/compare.py
 | 02 microstrip (openEMS) | Z0 quase-estático | < 3% vs H-J | **PASS** 0.54% (48.42 vs 48.69 ohm) |
 | 03 indutância (FastHenry) | L parcial barra + par ida-e-volta | < 3% vs Rosa/Grover | **PASS** 0.08% / 0.03% |
 | 04 pipeline PDN (openEMS) | Zin com decap: dip SRF + 2 picos | dip < 5%*, picos < 3% | **PASS** 3.9% / 0.34% / 0.69% |
-| 05 plano com fenda (openEMS) | recip., C(área), L_loop fenda/intacto | ver report | **PASS** 2.55% / 1.51% / 1.79x |
+| 05 plano com fenda (openEMS) | recip., C(razão/abs), L_loop, ext. LF | ver report | **PASS** 2.55% / 1.79% / 8.5% / 1.79x / 0.20% |
+| ext. LF (lowfreq) | prevê 2 décadas abaixo do ajuste | < 1% vs cavidade | **PASS** (tests/test_lowfreq.py) |
 
 *justificativas das tolerâncias nos docstrings dos compare.py e reports.
 
@@ -121,6 +122,34 @@ Achado físico registrado nos testes: os planos 100x80x0.5 mm contribuem
   touchstone S2P de fabricante (série ou shunt), com L de montagem
   somada e recusa explícita a extrapolar fora da banda do arquivo.
   Testes de ida-e-volta contra RLC sintético nas duas convenções.
+- **`pdn/lowfreq.py`** — extensão de baixa frequência para matrizes Z
+  extraídas por FDTD. IMPORTANTE: a limitação de LF é da SIMULAÇÃO
+  FDTD (janela finita ~150 ns -> piso útil ~60-80 MHz), não do fluxo:
+  abaixo da primeira ressonância o par de planos é quasi-estático
+  (Z = R + 1/(jwC) + jwL, exato), e os sinais comuns dessa faixa
+  (DC-DC 100 kHz-2 MHz, envelope de burst GSM) são cobertos pelo
+  modelo lumped ajustado na banda confiável do FDTD. Validado contra
+  o modelo de cavidade (exato em LF): ajuste em 80-250 MHz prevê
+  5-30 MHz a < 1% (tests/test_lowfreq.py). O modelo de cavidade
+  analítico (pdn/planes) nunca teve limitação de LF — vale de DC a
+  GHz; a extensão só é necessária para geometria recortada, onde a
+  matriz vem do FDTD.
+
+### Divisão de trabalho por frequência (PDN)
+
+| Faixa | Física | Ferramenta |
+|---|---|---|
+| DC | IR drop resistivo | solver DC (PDN Analyzer cobre) |
+| ~kHz até 1a ressonância | quasi-estático: C + L + R exatos | forma fechada / lumped ajustado (`lowfreq`) |
+| acima de ~f_res/2 | ondas: modos de cavidade, fendas | FDTD (`extract_openems`) ou modelo de cavidade |
+
+Notas de precisão do FDTD em LF: Re{Z} pequena sai corrompida pelo
+leakage (medido ~6x a 80 MHz) — R de planos em LF deve vir de solver
+DC; a métrica de validade quasi-estática do `extend_lf` usa só a parte
+imaginária por isso. O termo de perda condutiva delta_s/d do modelo de
+cavidade é inválido quando delta_s > espessura do cobre (f < ~5 MHz
+p/ 35 um) — superestima a perda; abaixo disso a R real satura na
+resistência DC de folha.
 
 ## Próximos passos (Fase 4)
 
