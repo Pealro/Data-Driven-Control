@@ -206,9 +206,26 @@ resistência DC de folha.
   camadas internas existem na placa (stackup/pours/drills confirmam)
   mas faltam no setup de plot do OutJob.
 
-## Próximos passos (Fase 7)
+## Fase 7 — Return path automatizado (a análise que motivou tudo)
 
-- Re-export de Gerbers com Mid Layers 1/2 -> gerber2ems para SI de
-  trilhas do Eagle_tracker (LTE_TX/RX, SPI)
-- Vértices reais dos pours (hoje bbox) — polígono completo no extrator
-- Fendas internas (polígono com furo) no extrator
+- **Caso 10** (`cases/case10_return_path/`) — detector de travessia de
+  splits: trilhas do Bottom (que referenciam o Int2 de POTÊNCIA a
+  155 um) vs fronteiras dos pours, tudo extraído do Altium via MCP
+  (get_board_tracks + get_board_copper_regions). Resultado no
+  Eagle_tracker: **32 travessias, 17 nets de sinal**, dominadas pela
+  borda da ilha MODEM_VCC (SIM/UART/SWD/I2C descendo ao CN4) — a
+  confirmação sistemática do achado original do review da placa,
+  agora com física quantificada por trás (caso 5). SPI não cruza.
+  Mitigação priorizada no report (stitching caps / re-rotear no TOP).
+- Nota de escopo: SI de trilhas via gerber2ems ficou de fora POR
+  DECISÃO — os sinais desta placa (UART/I2C/SPI curtos) não têm
+  conteúdo espectral que justifique simulação de canal; o valor de
+  EMI/SI aqui está no return path, que é o que o caso 10 cobre.
+
+## Próximos passos (Fase 8)
+
+- Vértices reais dos pours (hoje bbox: posições de travessia são
+  aproximadas; a lista de nets é confiável)
+- Fendas internas (polígono com furo) no extrator de matriz Z
+- Vias de sinal (get_board_vias) no detector: travessia por mudança
+  de camada e distância ao via de stitching mais próximo
