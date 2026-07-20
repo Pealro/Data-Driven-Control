@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from analytic import cavity
 from pdn import planes, network, target
-from pdn.capacitor import Decap
+from pdn.capacitor import Decap, DecapS2P
 
 A, B, D = 100e-3, 80e-3, 0.5e-3
 EPS_R, TAN_D = 4.4, 0.02
@@ -110,6 +110,63 @@ class TestNetworkReduction:
         i2 = np.argmin(np.abs(f - c_small.srf()))
         assert z_pk > 3 * np.abs(zin[i1])
         assert z_pk > 3 * np.abs(zin[i2])
+
+
+class TestDecapS2P:
+    @staticmethod
+    def _write_s2p(path, cap, f, mode):
+        """Sintetiza um touchstone S2P do RLC dado, na convenção pedida."""
+        z0 = 50.0
+        zd = cap.z(f)
+        if mode == 'series':
+            s21 = 2 * z0 / (2 * z0 + zd)
+            s11 = zd / (zd + 2 * z0)
+        else:  # shunt
+            zp = zd
+            s21 = 2 * zp / (2 * zp + z0)
+            s11 = -z0 / (2 * zp + z0)
+        with open(path, 'w') as fh:
+            fh.write('# Hz S RI R 50\n')
+            for k in range(len(f)):
+                fh.write(f'{f[k]:.6e} {s11[k].real:.9e} {s11[k].imag:.9e} '
+                         f'{s21[k].real:.9e} {s21[k].imag:.9e} '
+                         f'{s21[k].real:.9e} {s21[k].imag:.9e} '
+                         f'{s11[k].real:.9e} {s11[k].imag:.9e}\n')
+
+    @pytest.mark.parametrize('mode', ['series', 'shunt'])
+    def test_roundtrip_rlc(self, tmp_path, mode):
+        """S2P sintetizado de um RLC conhecido -> DecapS2P recupera a
+        mesma Z(f) (< 0.1%), nas duas convenções de medição."""
+        rlc = Decap(c=100e-9, esr=20e-3, esl=1e-9, l_mnt=0.0)
+        f_file = np.logspace(5, 9.3, 400)
+        p = tmp_path / 'cap.s2p'
+        self._write_s2p(p, rlc, f_file, mode)
+        s2p = DecapS2P(path=p, l_mnt=0.0, mode=mode)
+        f = np.logspace(5.1, 9.2, 100)
+        assert np.abs(s2p.z(f)) == pytest.approx(np.abs(rlc.z(f)), rel=1e-3)
+
+    def test_no_extrapolation(self, tmp_path):
+        """Fora da banda do arquivo: erro, nunca extrapolação."""
+        rlc = Decap(c=100e-9)
+        f_file = np.linspace(1e6, 1e9, 50)
+        p = tmp_path / 'cap.s2p'
+        self._write_s2p(p, rlc, f_file, 'series')
+        s2p = DecapS2P(path=p, l_mnt=0.0)
+        with pytest.raises(ValueError, match='fora do S2P'):
+            s2p.z(np.array([1e5, 1e6]))
+
+    def test_l_mnt_adds(self, tmp_path):
+        """l_mnt desloca a SRF para baixo como no RLC equivalente."""
+        rlc = Decap(c=100e-9, esr=20e-3, esl=1e-9, l_mnt=0.5e-9)
+        rlc_semmnt = Decap(c=100e-9, esr=20e-3, esl=1e-9, l_mnt=0.0)
+        f_file = np.logspace(5, 9.3, 800)
+        p = tmp_path / 'cap.s2p'
+        self._write_s2p(p, rlc_semmnt, f_file, 'series')
+        s2p = DecapS2P(path=p, l_mnt=0.5e-9)
+        f = np.logspace(6, 9, 2000)
+        f_dip_s2p = f[np.argmin(np.abs(s2p.z(f)))]
+        f_dip_rlc = f[np.argmin(np.abs(rlc.z(f)))]
+        assert f_dip_s2p == pytest.approx(f_dip_rlc, rel=0.01)
 
 
 class TestTarget:

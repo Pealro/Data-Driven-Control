@@ -57,6 +57,10 @@ python em_suite/cases/case01_cavity/compare.py
 | 01 cavidade (openEMS) | f das 3 primeiras ressonâncias | < 2% vs f_mn exato | **PASS** 0.20-1.54%; curvas Z(f) sobrepostas na banda toda |
 | 02 microstrip (openEMS) | Z0 quase-estático | < 3% vs H-J | **PASS** 0.54% (48.42 vs 48.69 ohm) |
 | 03 indutância (FastHenry) | L parcial barra + par ida-e-volta | < 3% vs Rosa/Grover | **PASS** 0.08% / 0.03% |
+| 04 pipeline PDN (openEMS) | Zin com decap: dip SRF + 2 picos | dip < 5%*, picos < 3% | **PASS** 3.9% / 0.34% / 0.69% |
+| 05 plano com fenda (openEMS) | recip., C(área), L_loop fenda/intacto | ver report | **PASS** 2.55% / 1.51% / 1.79x |
+
+*justificativas das tolerâncias nos docstrings dos compare.py e reports.
 
 Relatórios individuais: `cases/*/report.md`, gráficos em `cases/*/comparison.png`.
 
@@ -101,11 +105,26 @@ Achado físico registrado nos testes: os planos 100x80x0.5 mm contribuem
 10 uF isso já desvia |Zin| em 2.4%, por isso o teste de limite exato usa
 10-50 kHz.
 
-## Próximos passos (Fase 3)
+## Fase 3 — Geometria real e modelos de fabricante
 
-- Modelos de capacitor via S2P de fabricante (Murata/TDK) além do RLC
+- **`pdn/extract_openems.py`** — extrator de matriz Z multiporta por
+  FDTD para planos com fendas/recortes (config JSON, N simulações com
+  sondas de 1 Mohm, uma por porta). É a saída do retângulo ideal: onde
+  o modelo de cavidade deixa de valer, a matriz Z passa a vir do
+  openEMS e o resto do pipeline (Decap + Schur + target) é o mesmo.
+- **Caso 5** (`cases/case05_split_plane/`) — plano PWR com fenda de
+  4 x 60 mm entre as portas (classe do problema de return path do
+  Eagle_tracker). Âncoras: reciprocidade, C de baixa frequência
+  proporcional à área restante, e aumento da indutância de laço
+  porta-a-porta vs plano intacto (matriz do caso 4, mesmo método).
+- **`DecapS2P`** (`pdn/capacitor.py`) — capacitor a partir de
+  touchstone S2P de fabricante (série ou shunt), com L de montagem
+  somada e recusa explícita a extrapolar fora da banda do arquivo.
+  Testes de ida-e-volta contra RLC sintético nas duas convenções.
+
+## Próximos passos (Fase 4)
+
 - gerber2ems para SI pós-layout a partir dos Gerbers do Altium
-- Geometria de planos recortados (split) — sair do retângulo ideal:
-  extração da matriz Z via openEMS em vez do modelo de cavidade
 - Cross-check openEMS vs Palace (FEM) nos mesmos casos
 - Benchmark publicado com medição de terceiros
+- Fendas internas (polígono com furo) no extrator
