@@ -41,8 +41,10 @@ F_KNEE = 100e6
 C39 = Decap(c=22e-6, esr=4e-3, esl=0.7e-9, l_mnt=1.0e-9, name='C39 22uF')
 C_PROP = Decap(c=100e-9, esr=20e-3, esl=0.5e-9, l_mnt=0.8e-9,
                name='100nF 0402 proposto')
+BULK = Decap(c=220e-6, esr=25e-3, esl=1.6e-9, l_mnt=1.0e-9,
+             name='bulk 220uF polimero proposto')
 
-P_MODEM, P_C39, P_U10, P_PROP = 0, 1, 2, 3
+P_MODEM, P_C39, P_U10, P_PROP, P_PAD2, P_PAD52 = 0, 1, 2, 3, 4, 5
 
 
 def load_zmat(path, n):
@@ -60,7 +62,7 @@ def load_zmat(path, n):
 
 
 def main():
-    f_hf, z_hf = load_zmat(HERE / 'zmat_modem_vcc.csv', 4)
+    f_hf, z_hf = load_zmat(HERE / 'zmat_modem_vcc.csv', 6)
 
     # banda confiável do FDTD (>= 80 MHz) + extensão LF até 10 kHz
     hf = f_hf >= 80e6
@@ -75,7 +77,10 @@ def main():
     cenarios = {
         'A: rail nu': {},
         'B: como esta (so C39)': {P_C39: C39},
-        'C: C39 + 100nF no modem': {P_C39: C39, P_PROP: C_PROP},
+        'C: B + 100nF nos pads 39/41': {P_C39: C39, P_PROP: C_PROP},
+        'D: C + 100nF pads 2 e 52 + bulk 220uF no U10':
+            {P_C39: C39, P_PROP: C_PROP, P_PAD2: C_PROP,
+             P_PAD52: C_PROP, P_U10: BULK},
     }
 
     fig, ax = plt.subplots(figsize=(9.5, 6))
@@ -119,24 +124,24 @@ def main():
     report.append(
         '\n## Interpretação de engenharia\n'
         '- O cartão mPCIe carrega os próprios decaps de HF: o dever do '
-        'HOST é a faixa baixa/média. As violações acionáveis são:\n'
-        '  1. **< 137 kHz (14.6x)**: o envelope do burst GSM (217 Hz+) '
-        'não tem reservatório — falta BULK. Recomendação: 220 uF '
-        '(polímero/tântalo baixo-ESR) junto ao CN4;\n'
-        '  2. **2.6-30 MHz**: só o C39 não cobre; o 100 nF nos pads '
-        '39/41 (cenário C) corta a região de 10-30 MHz e cria o dip '
-        'local em 12 MHz — recomendado; adicionar um segundo 100 nF '
-        'nos pads 2/52;\n'
+        'HOST é a faixa baixa/média. Quantificado pelos cenários:\n'
+        '  1. **LF (envelope do burst GSM)**: como está, viola 14.6x '
+        'abaixo de 137 kHz; o bulk de 220 uF no U10 (cenário D) derruba '
+        'para 1.4x residual abaixo de 14 kHz — RESOLVE na prática. '
+        'Recomendação: 220 uF polímero baixo-ESR junto ao U10/CN4;\n'
+        '  2. **MF**: os 100 nF nos pads (39/41 e 2/52) cobrem '
+        '10-30 MHz; resta um vão de 9.1x em 2.8-7.3 MHz no cenário D — '
+        'fecha com um 1 uF 0603 ao lado de qualquer um dos 100 nF;\n'
         '- acima de ~50 MHz a responsabilidade é do cartão (decaps '
         'onboard) — as violações de HF do host são esperadas e não '
         'acionáveis deste lado;\n'
         '- o plano contribui pouco aqui: d = 1.23 mm dá C interplano '
-        'minúscula (~2.6 pF/cm2) — o rail vive dos capacitores, e a '
+        'minúscula (~3.0 pF/cm2) — o rail vive dos capacitores, e a '
         'indutância de espalhamento do pour (~1-2 nH) define o teto '
         'de MF. Consistente com o modelo lumped: mismatch 0.75%.\n'
         '\n## Notas de modelagem\n'
         '- pour aproximado pelo bbox (o MCP não expõe os vértices); '
-        'os pads mPCIe 2/52 (VBAT secundários) não modelados;\n'
+        'pads mPCIe 2/52 modelados como portas 5/6;\n'
         '- C39: 22 uF nominal sem derating de DC bias (X5R 16 V a '
         '3.3 V: ~-10-15%);\n'
         '- l_mnt inclui vias atravessando o core de 1.23 mm — dominante '

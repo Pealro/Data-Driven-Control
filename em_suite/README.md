@@ -188,11 +188,27 @@ resistência DC de folha.
   get_board_copper_regions (bbox), get_component_pins/data. Os tools
   de OutJob do MCP travam no AD26 — NÃO usar.
 
-## Próximos passos (Fase 6)
+## Fase 6 — Cross-check em Z(f) e rede completa do Eagle
 
-- Gerbers com camadas internas (re-export) -> gerber2ems no caso 6
-  para SI de trilhas do Eagle_tracker
+- **Caso 8** (`cases/case08_palace_driven/`) — Palace em modo DRIVEN:
+  porta lumped de 1 mm embutida na malha (BooleanFragments + seleção
+  por BoundingBox no Gmsh), sweep adaptativo 50 MHz-1.5 GHz. Z11 via
+  S11 (port-V/I do Palace são atados ao resistor da porta — Z vem de
+  Z0(1+S)/(1-S)). Após de-embedding de 0.10 nH de DEFINIÇÃO de porta
+  (porta-linha FEM vs porta sinc; mesma classe do caso 4): picos
+  0.00/0.00/0.44%, razão de magnitude em [0.5,2] em 100% da banda.
+  Cross-check triplo fechado também em Z(f), não só eigenmodes.
+- **Caso 9 v2** — 6 portas (+ pads mPCIe 2/52); cenário D quantificado:
+  bulk 220 uF no U10 derruba a violação de LF de 14.6x para 1.4x
+  (envelope de burst resolvido); 100 nF nos dois pares de pads cobre
+  10-30 MHz; resta 9.1x em 2.8-7.3 MHz -> fechar com 1 uF 0603.
+  Nota do zip de release: o job de Gerber plotou só Top/Bottom — as
+  camadas internas existem na placa (stackup/pours/drills confirmam)
+  mas faltam no setup de plot do OutJob.
+
+## Próximos passos (Fase 7)
+
+- Re-export de Gerbers com Mid Layers 1/2 -> gerber2ems para SI de
+  trilhas do Eagle_tracker (LTE_TX/RX, SPI)
 - Vértices reais dos pours (hoje bbox) — polígono completo no extrator
-- Pads mPCIe 2/52 como portas adicionais; cenário com bulk 220 uF
-- Palace em driven (portas lumped) para Z(f) — hoje só eigenmode
 - Fendas internas (polígono com furo) no extrator

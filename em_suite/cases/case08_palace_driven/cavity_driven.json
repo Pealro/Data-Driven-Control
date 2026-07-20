@@ -1,0 +1,57 @@
+{
+  "Problem":
+  {
+    "Type": "Driven",
+    "Verbose": 2,
+    "Output": "postpro"
+  },
+  "Model":
+  {
+    "Mesh": "cavity_driven.msh",
+    "L0": 1.0,
+    "Lc": 0.1
+  },
+  "Domains":
+  {
+    "Materials":
+    [
+      {
+        "Attributes": [1],
+        "Permittivity": 4.4,
+        "Permeability": 1.0,
+        "LossTan": 0.02
+      }
+    ]
+  },
+  "Boundaries":
+  {
+    "PEC": { "Attributes": [2] },
+    "PMC": { "Attributes": [3] },
+    "LumpedPort":
+    [
+      {
+        "Index": 1,
+        "R": 50.0,
+        "Direction": "+Z",
+        "Excitation": true,
+        "Attributes": [10]
+      }
+    ]
+  },
+  "Solver":
+  {
+    "Order": 2,
+    "Driven":
+    {
+      "MinFreq": 0.05,
+      "MaxFreq": 1.5,
+      "FreqStep": 0.005,
+      "AdaptiveTol": 1e-3
+    },
+    "Linear":
+    {
+      "Type": "Default",
+      "Tol": 1e-8
+    }
+  }
+}
