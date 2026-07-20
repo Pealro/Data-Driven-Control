@@ -171,9 +171,28 @@ resistência DC de folha.
   clone; requer gerbv), Palace em `/root/opt/palace/bin` (superbuild
   ~40 min; mpirun como root exige OMPI_ALLOW_RUN_AS_ROOT=1).
 
-## Próximos passos (Fase 5)
+## Fase 5 — Placa real do usuário (Eagle_tracker)
 
-- Rodar os Gerbers reais do Eagle_tracker no caso 6 (export Altium:
-  Gerber X2 + stackup + portas em simulation.json)
-- Fendas internas (polígono com furo) no extrator de matriz Z
+- **Caso 9** (`cases/case09_eagle_pdn/`) — PDN do rail MODEM_VCC do
+  Eagle_tracker, PRIMEIRA aplicação de produção do pipeline. Fluxo
+  100% autônomo SEM Gerber: geometria, stackup, nets, pinos e valores
+  extraídos direto do Altium via MCP (o export de Gerber do release
+  não incluía as camadas internas). Pour 27.3x17.2 mm (Int2) sobre GND
+  (Int1), core 1.232 mm, eps_r 4.2; portas: pads VBAT do mPCIe (39/41),
+  C39 (22 uF), U10 (load switch), + posição proposta de decap.
+  Resultado: rail vive dos capacitores (d grande -> C interplano
+  minúscula); violações acionáveis: falta bulk p/ envelope de burst
+  (<137 kHz, 14.6x) e cobertura de 2.6-30 MHz (100 nF nos pads
+  recomendado). Ver report.md.
+- Rota Altium->extração validada: get_pcb_layer_stackup,
+  get_board_copper_regions (bbox), get_component_pins/data. Os tools
+  de OutJob do MCP travam no AD26 — NÃO usar.
+
+## Próximos passos (Fase 6)
+
+- Gerbers com camadas internas (re-export) -> gerber2ems no caso 6
+  para SI de trilhas do Eagle_tracker
+- Vértices reais dos pours (hoje bbox) — polígono completo no extrator
+- Pads mPCIe 2/52 como portas adicionais; cenário com bulk 220 uF
 - Palace em driven (portas lumped) para Z(f) — hoje só eigenmode
+- Fendas internas (polígono com furo) no extrator
