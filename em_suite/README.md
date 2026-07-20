@@ -69,10 +69,43 @@ substrato: 48.42 ohm (0.54%). Moral: em FDTD, borda de metal mal
 resolvida desloca Z0 sistematicamente para baixo sem nenhum sinal visível
 na curva — só a âncora analítica denuncia.
 
-## Próximos passos (Fase 2)
+## Fase 2 — Pipeline PDN AC (`pdn/`)
 
-- Pipeline PDN AC parametrizado (planos + capacitores via S-params
-  de fabricante + varredura Z(f) no ngspice/Xyce + scikit-rf)
+Equivalente open source do fluxo PIPro, construído sobre o modelo de
+cavidade validado no caso 1:
+
+```
+pdn/
+  planes.py     # matriz Z multiporta do par de planos (série modal)
+  capacitor.py  # Decap: RLC série (C, ESR, ESL + L_mnt), SRF montada
+  network.py    # complemento de Schur: decaps como cargas shunt -> Zin
+  target.py     # target impedance (Zt = dV/dI) e detecção de violações
+```
+
+Uso típico (ver `examples/pdn_rail_bg95.py`):
+
+```python
+zmat = planes.z_matrix(f, a, b, d, eps_r, tan_d, ports)
+zin  = network.z_in(f, zmat, chip_port=0, decaps_at={1: Decap(c=100e-6), ...})
+viols = target.violations(f, abs(zin), target.target_profile(f, 3.8, 0.03, 2.0))
+```
+
+Validação da Fase 2:
+- `tests/test_pdn.py` (11 testes): identidades exatas (Schur com curto,
+  reciprocidade, decap dominante em LF, SRF, anti-ressonância entre caps)
+- caso 4: pipeline completo vs openEMS com o capacitor RLC embutido na
+  FDTD (`cases/case04_pdn_pipeline/`)
+
+Achado físico registrado nos testes: os planos 100x80x0.5 mm contribuem
+~0.95 nH de indutância de espalhamento entre portas — perto da SRF de um
+10 uF isso já desvia |Zin| em 2.4%, por isso o teste de limite exato usa
+10-50 kHz.
+
+## Próximos passos (Fase 3)
+
+- Modelos de capacitor via S2P de fabricante (Murata/TDK) além do RLC
 - gerber2ems para SI pós-layout a partir dos Gerbers do Altium
+- Geometria de planos recortados (split) — sair do retângulo ideal:
+  extração da matriz Z via openEMS em vez do modelo de cavidade
 - Cross-check openEMS vs Palace (FEM) nos mesmos casos
 - Benchmark publicado com medição de terceiros
