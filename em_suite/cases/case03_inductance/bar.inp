@@ -1,0 +1,10 @@
+* barra reta - indutancia parcial propria
+.units mm
+.default sigma=58000.0 nwinc=9 nhinc=9
+
+N1 x=0 y=0 z=0
+N2 x=20.0 y=0 z=0
+E1 N1 N2 w=1.0 h=1.0
+.external N1 N2
+.freq fmin=100.0 fmax=100.0 ndec=1
+.end
