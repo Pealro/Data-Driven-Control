@@ -60,6 +60,8 @@ python em_suite/cases/case01_cavity/compare.py
 | 04 pipeline PDN (openEMS) | Zin com decap: dip SRF + 2 picos | dip < 5%*, picos < 3% | **PASS** 3.9% / 0.34% / 0.69% |
 | 05 plano com fenda (openEMS) | recip., C(razão/abs), L_loop, ext. LF | ver report | **PASS** 2.55% / 1.79% / 8.5% / 1.79x / 0.20% |
 | ext. LF (lowfreq) | prevê 2 décadas abaixo do ajuste | < 1% vs cavidade | **PASS** (tests/test_lowfreq.py) |
+| 06 gerber2ems (medição!) | \|S11\| vs VNA (placa Antmicro) | MAE < 0.05, corr > 0.95 | **PASS** 0.048 / 0.979 |
+| 07 Palace FEM | 4 primeiros f_mn da cavidade | < 1% vs exato | **PASS** < 0.001% |
 
 *justificativas das tolerâncias nos docstrings dos compare.py e reports.
 
@@ -151,9 +153,27 @@ cavidade é inválido quando delta_s > espessura do cobre (f < ~5 MHz
 p/ 35 um) — superestima a perda; abaixo disso a R real satura na
 resistência DC de folha.
 
-## Próximos passos (Fase 4)
+## Fase 4 — Placa real, medição de terceiros e terceiro solver
 
-- gerber2ems para SI pós-layout a partir dos Gerbers do Altium
-- Cross-check openEMS vs Palace (FEM) nos mesmos casos
-- Benchmark publicado com medição de terceiros
-- Fendas internas (polígono com furo) no extrator
+- **Caso 6** (`cases/case06_gerber2ems/`) — pipeline Gerber -> openEMS
+  validado contra MEDIÇÃO: exemplo stub_short do gerber2ems (Antmicro
+  SI Test Board, open hardware), Gerbers de produção + vna.csv medido.
+  Zero tuning: MAE de |S11| 0.048 e correlação 0.979 contra a tendência
+  da medição (o ripple de ~150 MHz do vna.csv é o fixture não
+  de-embedded — não existe nos Gerbers; comparar mínimos pontuais seria
+  comparar artefato). É o mesmo caminho para rodar os Gerbers do
+  Altium/Eagle_tracker: `fab/` + stackup.json + simulation.json.
+- **Caso 7** (`cases/case07_palace/`) — Palace (FEM de elementos de
+  aresta, AWS) compilado do fonte; eigenmode da cavidade do caso 1 com
+  PEC/PMC: 4 primeiros modos a < 0.001% do f_mn exato. Cross-check
+  TRIPLO fechado: forma fechada <-> FDTD <-> FEM.
+- Ambiente WSL: gerber2ems instalado no venv (`pip install .` do
+  clone; requer gerbv), Palace em `/root/opt/palace/bin` (superbuild
+  ~40 min; mpirun como root exige OMPI_ALLOW_RUN_AS_ROOT=1).
+
+## Próximos passos (Fase 5)
+
+- Rodar os Gerbers reais do Eagle_tracker no caso 6 (export Altium:
+  Gerber X2 + stackup + portas em simulation.json)
+- Fendas internas (polígono com furo) no extrator de matriz Z
+- Palace em driven (portas lumped) para Z(f) — hoje só eigenmode
