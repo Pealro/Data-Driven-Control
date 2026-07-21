@@ -41,8 +41,43 @@ F_KNEE = 100e6
 C39 = Decap(c=22e-6, esr=4e-3, esl=0.7e-9, l_mnt=1.0e-9, name='C39 22uF')
 C_PROP = Decap(c=100e-9, esr=20e-3, esl=0.5e-9, l_mnt=0.8e-9,
                name='100nF 0402 proposto')
-BULK = Decap(c=220e-6, esr=25e-3, esl=1.6e-9, l_mnt=1.0e-9,
-             name='bulk 220uF polimero proposto')
+C1U = Decap(c=1e-6, esr=15e-3, esl=0.8e-9, l_mnt=0.8e-9,
+            name='1uF 0603 proposto')
+BULK = Decap(c=220e-6, esr=30e-3, esl=1.6e-9, l_mnt=1.0e-9,
+             name='bulk 220uF local proposto')
+
+
+class Upstream:
+    """Caminho REAL através do load switch U10 (correção pós-review do
+    usuário — a v1 deixava esta porta vazia e superestimava a violação
+    de LF em 10x): Ron ~50 mohm (dado do usuário) em série com o
+    paralelo de C36 (WCAP-PSLP 220 uF, ESR ~30 mohm, na entrada do U10,
+    confirmado no Altium) e o regulador de 3.3 V, modelado
+    comportamentalmente como 10 mohm + 300 nH (ativo em LF, saindo de
+    cena acima de ~dezenas de kHz). Acima de ~1 MHz este caminho é
+    bloqueado pelo Ron + indutâncias — os decaps locais dominam."""
+    name = 'via U10: Ron + (C36 || reg)'
+
+    def z(self, f):
+        w = 2 * np.pi * np.asarray(f, dtype=float)
+        zc36 = 0.030 + 1j * w * 2.5e-9 + 1.0 / (1j * w * 220e-6)
+        zreg = 0.010 + 1j * w * 300e-9
+        return 0.050 + zc36 * zreg / (zc36 + zreg)
+
+
+class Par:
+    """Cargas em paralelo na mesma porta."""
+
+    def __init__(self, *loads):
+        self.loads = loads
+        self.name = ' || '.join(getattr(ld, 'name', '?') for ld in loads)
+
+    def z(self, f):
+        y = sum(1.0 / ld.z(f) for ld in self.loads)
+        return 1.0 / y
+
+
+UP = Upstream()
 
 P_MODEM, P_C39, P_U10, P_PROP, P_PAD2, P_PAD52 = 0, 1, 2, 3, 4, 5
 
@@ -75,12 +110,14 @@ def main():
     zt = target.target_profile(f_all, V_RAIL, RIPPLE, DI, f_knee=F_KNEE)
 
     cenarios = {
-        'A: rail nu': {},
-        'B: como esta (so C39)': {P_C39: C39},
-        'C: B + 100nF nos pads 39/41': {P_C39: C39, P_PROP: C_PROP},
-        'D: C + 100nF pads 2 e 52 + bulk 220uF no U10':
-            {P_C39: C39, P_PROP: C_PROP, P_PAD2: C_PROP,
-             P_PAD52: C_PROP, P_U10: BULK},
+        'A: so o caminho via switch (sem caps locais)': {P_U10: UP},
+        'B: como esta (C39 + via switch)': {P_U10: UP, P_C39: C39},
+        'C: B + 3x100nF nos pads + 1uF':
+            {P_U10: UP, P_C39: Par(C39, C1U), P_PROP: C_PROP,
+             P_PAD2: C_PROP, P_PAD52: C_PROP},
+        'D: C + bulk 220uF local (opcional)':
+            {P_U10: Par(UP, BULK), P_C39: Par(C39, C1U), P_PROP: C_PROP,
+             P_PAD2: C_PROP, P_PAD52: C_PROP},
     }
 
     fig, ax = plt.subplots(figsize=(9.5, 6))
@@ -122,23 +159,25 @@ def main():
     fig.savefig(HERE / 'study.png', dpi=150)
 
     report.append(
-        '\n## Interpretação de engenharia\n'
-        '- O cartão mPCIe carrega os próprios decaps de HF: o dever do '
-        'HOST é a faixa baixa/média. Quantificado pelos cenários:\n'
-        '  1. **LF (envelope do burst GSM)**: como está, viola 14.6x '
-        'abaixo de 137 kHz; o bulk de 220 uF no U10 (cenário D) derruba '
-        'para 1.4x residual abaixo de 14 kHz — RESOLVE na prática. '
-        'Recomendação: 220 uF polímero baixo-ESR junto ao U10/CN4;\n'
-        '  2. **MF**: os 100 nF nos pads (39/41 e 2/52) cobrem '
-        '10-30 MHz; resta um vão de 9.1x em 2.8-7.3 MHz no cenário D — '
-        'fecha com um 1 uF 0603 ao lado de qualquer um dos 100 nF;\n'
+        '\n## Interpretação de engenharia (v3 — pós-review do usuário)\n'
+        '- CORREÇÃO relevante: a v2 deixava a porta do U10 vazia e '
+        'concluía "viola 14.6x em LF, falta bulk". Com o caminho real '
+        'via switch (Ron 50 mohm + C36 220 uF + regulador ativo), a LF '
+        'fica MARGINAL, não quebrada: o piso através do switch é '
+        '~Ron + ESR ~ 60-70 mohm vs target de 49.5 mohm — a 2 A de '
+        'burst isso é ~120-140 mV de afundamento (~4% de 3.3 V, '
+        'levemente acima dos 3% assumidos; com burst de 1 A, folga).\n'
+        '- Quem realmente falta é o MEIO da banda: entre ~1 e 50 MHz o '
+        'caminho via switch está bloqueado (Ron + indutâncias) e o C39 '
+        'sozinho já saiu de cena — os 3x100 nF nos pads + 1 uF '
+        '(cenário C) são a correção essencial;\n'
+        '- o bulk 220 uF LOCAL no MODEM_VCC (cenário D) vira OPCIONAL: '
+        'compra margem em LF ao contornar o Ron (util se o cartão for '
+        'GSM 2 A; desnecessário para LTE-M ~1 A);\n'
         '- acima de ~50 MHz a responsabilidade é do cartão (decaps '
-        'onboard) — as violações de HF do host são esperadas e não '
-        'acionáveis deste lado;\n'
-        '- o plano contribui pouco aqui: d = 1.23 mm dá C interplano '
-        'minúscula (~3.0 pF/cm2) — o rail vive dos capacitores, e a '
-        'indutância de espalhamento do pour (~1-2 nH) define o teto '
-        'de MF. Consistente com o modelo lumped: mismatch 0.75%.\n'
+        'onboard);\n'
+        '- o plano contribui pouco: d = 1.23 mm -> ~3.0 pF/cm2; o rail '
+        'vive dos capacitores. Mismatch do lumped LF: 0.75%.\n'
         '\n## Notas de modelagem\n'
         '- pour aproximado pelo bbox (o MCP não expõe os vértices); '
         'pads mPCIe 2/52 modelados como portas 5/6;\n'
