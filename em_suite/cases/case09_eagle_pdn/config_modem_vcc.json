@@ -1,0 +1,11 @@
+{
+  "_comment": "Rail MODEM_VCC do Eagle_tracker (extraido do Altium via MCP em 2026-07-20). Pour Int2 bbox (176.6,2130)-(1250.4,2806) mils -> retangulo 27.27x17.17 mm (aprox. bbox, pour real e poligonal). GND solido no Int1, core 48.4252 mil = 1.2316 mm, eps_r 4.2 do stackup real; tan_d 0.02 assumido (FR-4). Portas no referencial local do pour (origem no canto SW): 1=modem mPCIe pads 39/41 VBAT, 2=C39 (22uF), 3=U10 saida do load switch, 4=posicao PROPOSTA de decap junto aos pinos do modem. Pads mPCIe 2/52 (VBAT secundarios) nao modelados nesta rodada.",
+  "a": 27.27, "b": 17.17, "d": 1.2316,
+  "eps_r": 4.2, "tan_d": 0.02,
+  "ports": [[20.44, 6.86], [14.06, 0.70], [10.84, 0.70], [20.44, 5.36],
+            [2.04, 15.06], [25.24, 15.06]],
+  "_ports_comment": "5 e 6 = pads mPCIe 2 e 52 (VBAT secundarios)",
+  "slots": [],
+  "f_start": 30e6, "f_stop": 2.0e9, "n_f": 1801,
+  "nrts": 400000, "out": "zmat_modem_vcc.csv"
+}

@@ -1,0 +1,231 @@
+# em_suite — Suíte de validação para fluxo EM open source (PDN/SI)
+
+Fase 1 do projeto de reproduzir as capacidades PIPro/SIPro com ferramentas
+abertas (openEMS, FastHenry, gerber2ems). Esta suíte ancora o fluxo em
+**casos canônicos com resposta exata conhecida** — a âncora de validação
+que substitui a medição de bancada (VNA/TDR indisponíveis).
+
+## Estratégia de validação (3 âncoras, sem hardware)
+
+1. **Forma fechada exata**: cavidade plano-a-plano (f_mn e modelo de
+   cavidade completo), microstrip (Hammerstad-Jensen), indutância parcial
+   (Rosa/Grover). O solver tem que reproduzir esses valores.
+2. **Concordância entre solvers independentes**: openEMS (FDTD) vs Palace
+   (FEM) na mesma estrutura — métodos numéricos diferentes, mesmo
+   resultado (fase posterior).
+3. **Benchmark publicado com medição de terceiros** (fase posterior).
+
+## Estrutura
+
+```
+em_suite/
+  analytic/          # referências analíticas (testadas: 11 testes)
+    cavity.py        # f_mn + Z(f) do par de planos (modelo de cavidade)
+    microstrip.py    # Z0/eps_eff Hammerstad-Jensen 1980
+    inductance.py    # indutância parcial Rosa/Grover/Ruehli
+  tests/
+    test_analytic.py # âncoras: limites exatos + valores publicados
+  cases/
+    case01_cavity/   # openEMS vs modelo de cavidade (PDN)
+      run_openems.py #   roda no WSL:  source ~/venv-em/bin/activate
+      compare.py     #   compara, gera comparison.png + report.md
+```
+
+## Ambiente
+
+- **Windows**: Python 3.11 (numpy/scipy/matplotlib/scikit-rf/pytest) —
+  módulo analítico, testes e pós-processamento.
+- **WSL Ubuntu 24.04**: openEMS compilado do fonte em `~/opt/openEMS`
+  (branch master, `--python --disable-GUI`), venv em `~/venv-em`.
+  Build: `~/openEMS-Project/update_openEMS.sh` (log em `~/build_openems.log`).
+
+## Rodar
+
+```powershell
+# testes das referências analíticas (Windows)
+python -m pytest em_suite/tests -v
+
+# caso 1 (solver no WSL, comparação no Windows)
+wsl -d Ubuntu-24.04 -- bash -lc "source ~/venv-em/bin/activate && cd /mnt/c/<repo>/em_suite/cases/case01_cavity && python run_openems.py"
+python em_suite/cases/case01_cavity/compare.py
+```
+
+## Resultados (2026-07-20) — Fase 1 completa
+
+| Caso | Grandeza | Critério | Resultado |
+|------|----------|----------|-----------|
+| 01 cavidade (openEMS) | f das 3 primeiras ressonâncias | < 2% vs f_mn exato | **PASS** 0.20-1.54%; curvas Z(f) sobrepostas na banda toda |
+| 02 microstrip (openEMS) | Z0 quase-estático | < 3% vs H-J | **PASS** 0.54% (48.42 vs 48.69 ohm) |
+| 03 indutância (FastHenry) | L parcial barra + par ida-e-volta | < 3% vs Rosa/Grover | **PASS** 0.08% / 0.03% |
+| 04 pipeline PDN (openEMS) | Zin com decap: dip SRF + 2 picos | dip < 5%*, picos < 3% | **PASS** 3.9% / 0.34% / 0.69% |
+| 05 plano com fenda (openEMS) | recip., C(razão/abs), L_loop, ext. LF | ver report | **PASS** 2.55% / 1.79% / 8.5% / 1.79x / 0.20% |
+| ext. LF (lowfreq) | prevê 2 décadas abaixo do ajuste | < 1% vs cavidade | **PASS** (tests/test_lowfreq.py) |
+| 06 gerber2ems (medição!) | \|S11\| vs VNA (placa Antmicro) | MAE < 0.05, corr > 0.95 | **PASS** 0.048 / 0.979 |
+| 07 Palace FEM | 4 primeiros f_mn da cavidade | < 1% vs exato | **PASS** < 0.001% |
+
+*justificativas das tolerâncias nos docstrings dos compare.py e reports.
+
+Relatórios individuais: `cases/*/report.md`, gráficos em `cases/*/comparison.png`.
+
+### Lição registrada (caso 02)
+
+Com malha W/8 e regra dos terços invertida, o Z0 saiu 46.7 ohm — curva
+lisa, plausível e 4% errada. Corrigindo a regra dos terços (linha a res/3
+DENTRO do metal, 2*res/3 fora) e refinando para W/12 com 8 células no
+substrato: 48.42 ohm (0.54%). Moral: em FDTD, borda de metal mal
+resolvida desloca Z0 sistematicamente para baixo sem nenhum sinal visível
+na curva — só a âncora analítica denuncia.
+
+## Fase 2 — Pipeline PDN AC (`pdn/`)
+
+Equivalente open source do fluxo PIPro, construído sobre o modelo de
+cavidade validado no caso 1:
+
+```
+pdn/
+  planes.py     # matriz Z multiporta do par de planos (série modal)
+  capacitor.py  # Decap: RLC série (C, ESR, ESL + L_mnt), SRF montada
+  network.py    # complemento de Schur: decaps como cargas shunt -> Zin
+  target.py     # target impedance (Zt = dV/dI) e detecção de violações
+```
+
+Uso típico (ver `examples/pdn_rail_bg95.py`):
+
+```python
+zmat = planes.z_matrix(f, a, b, d, eps_r, tan_d, ports)
+zin  = network.z_in(f, zmat, chip_port=0, decaps_at={1: Decap(c=100e-6), ...})
+viols = target.violations(f, abs(zin), target.target_profile(f, 3.8, 0.03, 2.0))
+```
+
+Validação da Fase 2:
+- `tests/test_pdn.py` (11 testes): identidades exatas (Schur com curto,
+  reciprocidade, decap dominante em LF, SRF, anti-ressonância entre caps)
+- caso 4: pipeline completo vs openEMS com o capacitor RLC embutido na
+  FDTD (`cases/case04_pdn_pipeline/`)
+
+Achado físico registrado nos testes: os planos 100x80x0.5 mm contribuem
+~0.95 nH de indutância de espalhamento entre portas — perto da SRF de um
+10 uF isso já desvia |Zin| em 2.4%, por isso o teste de limite exato usa
+10-50 kHz.
+
+## Fase 3 — Geometria real e modelos de fabricante
+
+- **`pdn/extract_openems.py`** — extrator de matriz Z multiporta por
+  FDTD para planos com fendas/recortes (config JSON, N simulações com
+  sondas de 1 Mohm, uma por porta). É a saída do retângulo ideal: onde
+  o modelo de cavidade deixa de valer, a matriz Z passa a vir do
+  openEMS e o resto do pipeline (Decap + Schur + target) é o mesmo.
+- **Caso 5** (`cases/case05_split_plane/`) — plano PWR com fenda de
+  4 x 60 mm entre as portas (classe do problema de return path do
+  Eagle_tracker). Âncoras: reciprocidade, C de baixa frequência
+  proporcional à área restante, e aumento da indutância de laço
+  porta-a-porta vs plano intacto (matriz do caso 4, mesmo método).
+- **`DecapS2P`** (`pdn/capacitor.py`) — capacitor a partir de
+  touchstone S2P de fabricante (série ou shunt), com L de montagem
+  somada e recusa explícita a extrapolar fora da banda do arquivo.
+  Testes de ida-e-volta contra RLC sintético nas duas convenções.
+- **`pdn/lowfreq.py`** — extensão de baixa frequência para matrizes Z
+  extraídas por FDTD. IMPORTANTE: a limitação de LF é da SIMULAÇÃO
+  FDTD (janela finita ~150 ns -> piso útil ~60-80 MHz), não do fluxo:
+  abaixo da primeira ressonância o par de planos é quasi-estático
+  (Z = R + 1/(jwC) + jwL, exato), e os sinais comuns dessa faixa
+  (DC-DC 100 kHz-2 MHz, envelope de burst GSM) são cobertos pelo
+  modelo lumped ajustado na banda confiável do FDTD. Validado contra
+  o modelo de cavidade (exato em LF): ajuste em 80-250 MHz prevê
+  5-30 MHz a < 1% (tests/test_lowfreq.py). O modelo de cavidade
+  analítico (pdn/planes) nunca teve limitação de LF — vale de DC a
+  GHz; a extensão só é necessária para geometria recortada, onde a
+  matriz vem do FDTD.
+
+### Divisão de trabalho por frequência (PDN)
+
+| Faixa | Física | Ferramenta |
+|---|---|---|
+| DC | IR drop resistivo | solver DC (PDN Analyzer cobre) |
+| ~kHz até 1a ressonância | quasi-estático: C + L + R exatos | forma fechada / lumped ajustado (`lowfreq`) |
+| acima de ~f_res/2 | ondas: modos de cavidade, fendas | FDTD (`extract_openems`) ou modelo de cavidade |
+
+Notas de precisão do FDTD em LF: Re{Z} pequena sai corrompida pelo
+leakage (medido ~6x a 80 MHz) — R de planos em LF deve vir de solver
+DC; a métrica de validade quasi-estática do `extend_lf` usa só a parte
+imaginária por isso. O termo de perda condutiva delta_s/d do modelo de
+cavidade é inválido quando delta_s > espessura do cobre (f < ~5 MHz
+p/ 35 um) — superestima a perda; abaixo disso a R real satura na
+resistência DC de folha.
+
+## Fase 4 — Placa real, medição de terceiros e terceiro solver
+
+- **Caso 6** (`cases/case06_gerber2ems/`) — pipeline Gerber -> openEMS
+  validado contra MEDIÇÃO: exemplo stub_short do gerber2ems (Antmicro
+  SI Test Board, open hardware), Gerbers de produção + vna.csv medido.
+  Zero tuning: MAE de |S11| 0.048 e correlação 0.979 contra a tendência
+  da medição (o ripple de ~150 MHz do vna.csv é o fixture não
+  de-embedded — não existe nos Gerbers; comparar mínimos pontuais seria
+  comparar artefato). É o mesmo caminho para rodar os Gerbers do
+  Altium/Eagle_tracker: `fab/` + stackup.json + simulation.json.
+- **Caso 7** (`cases/case07_palace/`) — Palace (FEM de elementos de
+  aresta, AWS) compilado do fonte; eigenmode da cavidade do caso 1 com
+  PEC/PMC: 4 primeiros modos a < 0.001% do f_mn exato. Cross-check
+  TRIPLO fechado: forma fechada <-> FDTD <-> FEM.
+- Ambiente WSL: gerber2ems instalado no venv (`pip install .` do
+  clone; requer gerbv), Palace em `/root/opt/palace/bin` (superbuild
+  ~40 min; mpirun como root exige OMPI_ALLOW_RUN_AS_ROOT=1).
+
+## Fase 5 — Placa real do usuário (Eagle_tracker)
+
+- **Caso 9** (`cases/case09_eagle_pdn/`) — PDN do rail MODEM_VCC do
+  Eagle_tracker, PRIMEIRA aplicação de produção do pipeline. Fluxo
+  100% autônomo SEM Gerber: geometria, stackup, nets, pinos e valores
+  extraídos direto do Altium via MCP (o export de Gerber do release
+  não incluía as camadas internas). Pour 27.3x17.2 mm (Int2) sobre GND
+  (Int1), core 1.232 mm, eps_r 4.2; portas: pads VBAT do mPCIe (39/41),
+  C39 (22 uF), U10 (load switch), + posição proposta de decap.
+  Resultado: rail vive dos capacitores (d grande -> C interplano
+  minúscula); violações acionáveis: falta bulk p/ envelope de burst
+  (<137 kHz, 14.6x) e cobertura de 2.6-30 MHz (100 nF nos pads
+  recomendado). Ver report.md.
+- Rota Altium->extração validada: get_pcb_layer_stackup,
+  get_board_copper_regions (bbox), get_component_pins/data. Os tools
+  de OutJob do MCP travam no AD26 — NÃO usar.
+
+## Fase 6 — Cross-check em Z(f) e rede completa do Eagle
+
+- **Caso 8** (`cases/case08_palace_driven/`) — Palace em modo DRIVEN:
+  porta lumped de 1 mm embutida na malha (BooleanFragments + seleção
+  por BoundingBox no Gmsh), sweep adaptativo 50 MHz-1.5 GHz. Z11 via
+  S11 (port-V/I do Palace são atados ao resistor da porta — Z vem de
+  Z0(1+S)/(1-S)). Após de-embedding de 0.10 nH de DEFINIÇÃO de porta
+  (porta-linha FEM vs porta sinc; mesma classe do caso 4): picos
+  0.00/0.00/0.44%, razão de magnitude em [0.5,2] em 100% da banda.
+  Cross-check triplo fechado também em Z(f), não só eigenmodes.
+- **Caso 9 v2** — 6 portas (+ pads mPCIe 2/52); cenário D quantificado:
+  bulk 220 uF no U10 derruba a violação de LF de 14.6x para 1.4x
+  (envelope de burst resolvido); 100 nF nos dois pares de pads cobre
+  10-30 MHz; resta 9.1x em 2.8-7.3 MHz -> fechar com 1 uF 0603.
+  Nota do zip de release: o job de Gerber plotou só Top/Bottom — as
+  camadas internas existem na placa (stackup/pours/drills confirmam)
+  mas faltam no setup de plot do OutJob.
+
+## Fase 7 — Return path automatizado (a análise que motivou tudo)
+
+- **Caso 10** (`cases/case10_return_path/`) — detector de travessia de
+  splits: trilhas do Bottom (que referenciam o Int2 de POTÊNCIA a
+  155 um) vs fronteiras dos pours, tudo extraído do Altium via MCP
+  (get_board_tracks + get_board_copper_regions). Resultado no
+  Eagle_tracker: **32 travessias, 17 nets de sinal**, dominadas pela
+  borda da ilha MODEM_VCC (SIM/UART/SWD/I2C descendo ao CN4) — a
+  confirmação sistemática do achado original do review da placa,
+  agora com física quantificada por trás (caso 5). SPI não cruza.
+  Mitigação priorizada no report (stitching caps / re-rotear no TOP).
+- Nota de escopo: SI de trilhas via gerber2ems ficou de fora POR
+  DECISÃO — os sinais desta placa (UART/I2C/SPI curtos) não têm
+  conteúdo espectral que justifique simulação de canal; o valor de
+  EMI/SI aqui está no return path, que é o que o caso 10 cobre.
+
+## Próximos passos (Fase 8)
+
+- Vértices reais dos pours (hoje bbox: posições de travessia são
+  aproximadas; a lista de nets é confiável)
+- Fendas internas (polígono com furo) no extrator de matriz Z
+- Vias de sinal (get_board_vias) no detector: travessia por mudança
+  de camada e distância ao via de stitching mais próximo

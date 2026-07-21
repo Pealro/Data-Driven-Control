@@ -1,0 +1,15 @@
+* par ida-e-volta - L de laco parcial
+.units mm
+.default sigma=58000.0 nwinc=9 nhinc=9
+
+N1 x=0 y=0 z=0
+N2 x=20.0 y=0 z=0
+N3 x=20.0 y=4.0 z=0
+N4 x=0 y=4.0 z=0
+E1 N1 N2 w=1.0 h=1.0
+E2 N4 N3 w=1.0 h=1.0
+* portas: ida pela E1, volta pela E2 (curto ideal na extremidade x=L)
+.equiv N2 N3
+.external N1 N4
+.freq fmin=100.0 fmax=100.0 ndec=1
+.end

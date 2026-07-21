@@ -1,0 +1,15 @@
+# Caso 5 — Plano PWR com fenda: extrator openEMS + âncoras
+
+Planos 100 x 80 x 0.5 mm; fenda x = 48-52 mm, y = 20-80 mm (ponte de 20 mm em y = 0); portas em (25, 20) e (75, 40).
+
+(C do plano intacto seria 623.3 pF — a extração distingue a área removida.)
+
+| Âncora | Valor | Critério | Status |
+|---|---|---|:---:|
+| reciprocidade (mediana, 100 MHz+; ver docstring) | 2.55% | < 3% @ 1.2M TS | PASS |
+| razão C_fenda/C_intacto vs (A - A_f)/A | 0.987 vs 0.970 (1.79%) | < 3% | PASS |
+| C intacto vs eps*A/d (fringing + leakage) | 676.6 pF vs 623.3 pF (8.54%) | < 10% | PASS |
+| L_loop fenda vs intacto | 1.74 nH vs 0.97 nH (1.79x) | > 1.2x | PASS |
+| extensão LF: mismatch Im do lumped (80-123 MHz) | 0.20% | < 2% | PASS |
+
+**Resultado: APROVADO**
